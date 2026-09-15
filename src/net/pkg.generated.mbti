@@ -1,0 +1,115 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "Ljh684/moonnet-lab/src/net"
+
+import {
+  "Ljh684/moonnet-lab/src/sim",
+  "moonbitlang/core/debug",
+}
+
+// Values
+pub fn default_mtu() -> Int
+
+pub fn frame_overhead() -> Int
+
+pub fn percent(Double) -> String
+
+pub fn wire_size(Int) -> Int
+
+// Errors
+
+// Types and methods
+pub(all) enum Admission {
+  Accepted
+  DroppedPacketLimit
+  DroppedByteLimit
+}
+pub fn Admission::render(Self) -> String
+pub impl Show for Admission
+
+pub(all) struct Link[T] {
+  spec : LinkSpec
+  rng : @sim.Rng
+  queue : PacketQueue[T]
+  deliver : (Packet[T]) -> Unit
+  mut busy_until : @sim.Time
+  mut service_time : @sim.Time
+  mut started_at : @sim.Time
+  mut transmitted : Int
+  mut bytes_sent : Int64
+}
+pub fn[T] Link::busy_time(Self[T]) -> @sim.Time
+pub fn[T] Link::bytes_sent(Self[T]) -> Int64
+pub fn[T] Link::draw_jitter(Self[T], @sim.Sim) -> @sim.Time
+pub fn[T] Link::dropped(Self[T]) -> Int
+pub fn[T] Link::name(Self[T]) -> String
+pub fn[T] Link::new(LinkSpec, UInt64, (Packet[T]) -> Unit) -> Self[T]
+pub fn[T] Link::pump(Self[T], @sim.Sim) -> Unit
+pub fn[T] Link::send(Self[T], @sim.Sim, Packet[T]) -> Admission
+pub fn[T] Link::summary(Self[T], @sim.Sim) -> String
+pub fn[T] Link::transmitted(Self[T]) -> Int
+pub fn[T] Link::utilization(Self[T], @sim.Sim) -> Double
+
+pub(all) struct LinkSpec {
+  name : String
+  bandwidth_bps : Int64
+  delay : @sim.Time
+  jitter : @sim.Time
+  queue : QueueSpec
+} derive(Eq, @debug.Debug)
+pub fn LinkSpec::new(String, Int64, @sim.Time, QueueSpec) -> Self
+pub fn LinkSpec::with_jitter(Self, @sim.Time) -> Self
+
+pub(all) struct Packet[T] {
+  id : Int
+  flow : Int
+  kind : PacketKind
+  size : Int
+  payload : T
+}
+pub fn[T] Packet::label(Self[T]) -> String
+pub fn[T] Packet::new(Int, Int, PacketKind, Int, T) -> Self[T]
+
+pub(all) enum PacketKind {
+  Data
+  Ack
+  Syn
+  SynAck
+  Fin
+}
+pub fn PacketKind::render(Self) -> String
+pub impl Show for PacketKind
+
+pub(all) struct PacketQueue[T] {
+  spec : QueueSpec
+  mut slots : Array[Packet[T]?]
+  mut head : Int
+  mut count : Int
+  mut bytes : Int
+  mut admitted : Int
+  mut dropped : Int
+  mut dropped_bytes : Int
+  mut peak_packets : Int
+  mut peak_bytes : Int
+}
+pub fn[T] PacketQueue::admitted(Self[T]) -> Int
+pub fn[T] PacketQueue::bytes(Self[T]) -> Int
+pub fn[T] PacketQueue::dequeue(Self[T]) -> Packet[T]?
+pub fn[T] PacketQueue::dropped(Self[T]) -> Int
+pub fn[T] PacketQueue::enqueue(Self[T], Packet[T]) -> Admission
+pub fn[T] PacketQueue::is_empty(Self[T]) -> Bool
+pub fn[T] PacketQueue::length(Self[T]) -> Int
+pub fn[T] PacketQueue::new(QueueSpec) -> Self[T]
+pub fn[T] PacketQueue::peak(Self[T]) -> (Int, Int)
+pub fn[T] PacketQueue::peek(Self[T]) -> Packet[T]?
+pub fn[T] PacketQueue::summary(Self[T]) -> String
+
+pub(all) struct QueueSpec {
+  max_packets : Int
+  max_bytes : Int
+} derive(Eq, @debug.Debug)
+pub fn QueueSpec::bytes(Int) -> Self
+pub fn QueueSpec::packets(Int) -> Self
+
+// Type aliases
+
+// Traits

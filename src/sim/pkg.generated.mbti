@@ -1,0 +1,92 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "Ljh684/moonnet-lab/src/sim"
+
+import {
+  "moonbitlang/core/debug",
+}
+
+// Values
+pub fn fnv1a64(String) -> UInt64
+
+pub fn rotl64(UInt64, Int) -> UInt64
+
+// Errors
+
+// Types and methods
+pub(all) struct Rng {
+  mut s0 : UInt64
+  mut s1 : UInt64
+  mut s2 : UInt64
+  mut s3 : UInt64
+}
+pub fn Rng::fork(Self, String) -> Self
+pub fn Rng::new(UInt64) -> Self
+pub fn Rng::next_bool(Self, Double) -> Bool
+pub fn Rng::next_double(Self) -> Double
+pub fn Rng::next_double_between(Self, Double, Double) -> Double
+pub fn Rng::next_exponential(Self, Double) -> Double
+pub fn Rng::next_int(Self, Int) -> Int
+pub fn Rng::next_int64(Self, Int64) -> Int64
+pub fn Rng::next_u64(Self) -> UInt64
+
+pub(all) struct Scheduled {
+  time : Time
+  seq : Int
+  tag : String
+  action : () -> Unit
+}
+
+pub(all) struct Sim {
+  mut now : Time
+  mut seq : Int
+  mut processed : Int
+  mut recording : Bool
+  heap : Array[Scheduled]
+  rng : Rng
+  journal : Array[String]
+}
+pub fn Sim::after(Self, Time, String, () -> Unit) -> Unit
+pub fn Sim::at(Self, Time, String, () -> Unit) -> Unit
+pub fn Sim::journal(Self) -> Array[String]
+pub fn Sim::new(UInt64) -> Self
+pub fn Sim::note(Self, String) -> Unit
+pub fn Sim::now(Self) -> Time
+pub fn Sim::pending(Self) -> Int
+pub fn Sim::processed(Self) -> Int
+pub fn Sim::rng(Self) -> Rng
+pub fn Sim::run(Self, max_events? : Int) -> Unit
+pub fn Sim::run_for(Self, Time) -> Unit
+pub fn Sim::run_until(Self, Time) -> Unit
+pub fn Sim::schedule_at(Self, Time, String, () -> Unit) -> Unit
+pub fn Sim::start_journal(Self) -> Unit
+pub fn Sim::step(Self) -> Bool
+
+pub(all) struct SplitMix64 {
+  mut state : UInt64
+}
+pub fn SplitMix64::new(UInt64) -> Self
+pub fn SplitMix64::next_u64(Self) -> UInt64
+
+pub(all) struct Time {
+  ps : Int64
+} derive(Compare, Eq, Hash, @debug.Debug)
+pub fn Time::fibre_distance_km(Self) -> Double
+pub fn Time::from_ms(Int64) -> Self
+pub fn Time::from_ms_f(Double) -> Self
+pub fn Time::from_ns(Int64) -> Self
+pub fn Time::from_ps(Int64) -> Self
+pub fn Time::from_s(Int64) -> Self
+pub fn Time::from_us(Int64) -> Self
+pub fn Time::propagation(Double, Double) -> Self
+pub fn Time::render(Self) -> String
+pub fn Time::serialize(Int64, Int64) -> Self
+pub fn Time::to_ms_f(Self) -> Double
+pub fn Time::to_ps(Self) -> Int64
+pub fn Time::zero() -> Self
+pub impl Add for Time
+pub impl Show for Time
+pub impl Sub for Time
+
+// Type aliases
+
+// Traits
