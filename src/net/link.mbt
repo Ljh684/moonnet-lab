@@ -9,6 +9,11 @@ pub(all) struct LinkSpec {
   bandwidth_bps : Int64
   delay : @sim.Time
   jitter : @sim.Time
+  /// Probability that a packet is lost on the wire, in `[0, 1]`.
+  ///
+  /// Loss happens after serialization: a lost packet still occupies the link for
+  /// its full transmission time, the way a corrupted frame does on a real wire.
+  loss_rate : Double
   queue : QueueSpec
 } derive(Eq, Debug)
 
@@ -20,7 +25,14 @@ pub fn LinkSpec::new(
   delay : @sim.Time,
   queue : QueueSpec,
 ) -> LinkSpec {
-  { name, bandwidth_bps, delay, jitter: @sim.Time::zero(), queue, }
+  {
+    name,
+    bandwidth_bps,
+    delay,
+    jitter: @sim.Time::zero(),
+    loss_rate: 0.0,
+    queue,
+  }
 }
 
 ///|
@@ -29,6 +41,15 @@ pub fn LinkSpec::new(
 /// is reproducible and independent of every other link.
 pub fn LinkSpec::with_jitter(self : LinkSpec, jitter : @sim.Time) -> LinkSpec {
   { ..self, jitter, }
+}
+
+///|
+/// The same link, now losing the given fraction of the packets it transmits.
+///
+/// The decision comes from the link's own random stream, so "1% loss" is not
+/// "roughly 1% today" but the exact same set of lost packets on every run.
+pub fn LinkSpec::with_loss(self : LinkSpec, rate : Double) -> LinkSpec {
+  { ..self, loss_rate: rate, }
 }
 
 ///|
@@ -48,6 +69,7 @@ pub(all) struct Link[T] {
   mut started_at : @sim.Time
   mut transmitted : Int
   mut bytes_sent : Int64
+  mut lost : Int
 }
 
 ///|
@@ -66,6 +88,7 @@ pub fn[T] Link::new(
     started_at: @sim.Time::zero(),
     transmitted: 0,
     bytes_sent: 0L,
+    lost: 0,
   }
 }
 
@@ -124,11 +147,31 @@ pub fn[T] Link::pump(self : Link[T], sim : @sim.Sim) -> Unit {
       self.bytes_sent = self.bytes_sent + packet.size.to_int64()
       let link_name = self.spec.name
       let id = packet.id
-      sim.at(arrival, link_name + " delivers #" + id.to_string(), () => {
-        (self.deliver)(packet)
-      })
+      if self.draw_loss(sim) {
+        self.lost = self.lost + 1
+        sim.note(link_name + " loses #" + id.to_string())
+      } else {
+        sim.at(arrival, link_name + " delivers #" + id.to_string(), () => {
+          (self.deliver)(packet)
+        })
+      }
       sim.at(departure, link_name + " free", () => self.pump(sim))
     }
+  }
+}
+
+///|
+/// Decide whether the transmission that just started is lost.
+///
+/// The draw is skipped entirely on a loss-free link, so adding a reliable link
+/// to a scenario cannot shift the random stream of the links around it.
+pub fn[T] Link::draw_loss(self : Link[T], sim : @sim.Sim) -> Bool {
+  if self.spec.loss_rate <= 0.0 {
+    false
+  } else if self.spec.loss_rate >= 1.0 {
+    true
+  } else {
+    sim.rng().next_double() < self.spec.loss_rate
   }
 }
 
@@ -191,6 +234,12 @@ pub fn[T] Link::dropped(self : Link[T]) -> Int {
 }
 
 ///|
+/// Packets this link accepted, transmitted, and then lost on the wire.
+pub fn[T] Link::lost(self : Link[T]) -> Int {
+  self.lost
+}
+
+///|
 /// A one-line summary for reports and tests.
 pub fn[T] Link::summary(self : Link[T], sim : @sim.Sim) -> String {
   self.spec.name +
@@ -200,7 +249,9 @@ pub fn[T] Link::summary(self : Link[T], sim : @sim.Sim) -> String {
   self.bytes_sent.to_string() +
   " bytes, " +
   self.dropped().to_string() +
-  " dropped, utilization " +
+  " dropped, " +
+  self.lost.to_string() +
+  " lost, utilization " +
   percent(self.utilization(sim))
 }
 

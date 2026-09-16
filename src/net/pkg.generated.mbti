@@ -36,11 +36,14 @@ pub(all) struct Link[T] {
   mut started_at : @sim.Time
   mut transmitted : Int
   mut bytes_sent : Int64
+  mut lost : Int
 }
 pub fn[T] Link::busy_time(Self[T]) -> @sim.Time
 pub fn[T] Link::bytes_sent(Self[T]) -> Int64
 pub fn[T] Link::draw_jitter(Self[T], @sim.Sim) -> @sim.Time
+pub fn[T] Link::draw_loss(Self[T], @sim.Sim) -> Bool
 pub fn[T] Link::dropped(Self[T]) -> Int
+pub fn[T] Link::lost(Self[T]) -> Int
 pub fn[T] Link::name(Self[T]) -> String
 pub fn[T] Link::new(LinkSpec, UInt64, (Packet[T]) -> Unit) -> Self[T]
 pub fn[T] Link::pump(Self[T], @sim.Sim) -> Unit
@@ -54,10 +57,12 @@ pub(all) struct LinkSpec {
   bandwidth_bps : Int64
   delay : @sim.Time
   jitter : @sim.Time
+  loss_rate : Double
   queue : QueueSpec
 } derive(Eq, @debug.Debug)
 pub fn LinkSpec::new(String, Int64, @sim.Time, QueueSpec) -> Self
 pub fn LinkSpec::with_jitter(Self, @sim.Time) -> Self
+pub fn LinkSpec::with_loss(Self, Double) -> Self
 
 pub(all) struct Packet[T] {
   id : Int

@@ -12,6 +12,66 @@ fn pattern_bytes(count : Int) -> Bytes {
 }
 
 ///|
+
+///|
+/// Which data segments the direct loopback throws away.
+enum DropSpec {
+  DropNone
+  DropNth(Int)
+  DropAll
+}
+
+///|
+/// Two connections wired straight to each other with a fixed one-way delay,
+/// bypassing the link layer.
+///
+/// Losing a specific packet is the one thing a random loss model cannot do on
+/// demand, and "the third data segment never arrives" is exactly the kind of
+/// scenario a retransmission test needs. Wiring the connections directly makes
+/// that decision explicit instead of seed-dependent.
+fn wire_loopback(
+  sim : @sim.Sim,
+  client : @tcp.TcpConnection,
+  server : @tcp.TcpConnection,
+  one_way : @sim.Time,
+  drop : DropSpec,
+) -> Unit {
+  let mut data_count = 0
+  client.set_emit(segment => {
+    if segment.payload.length() > 0 {
+      data_count = data_count + 1
+    }
+    let drop_this = match drop {
+      DropNone => false
+      DropNth(index) => segment.payload.length() > 0 && data_count == index
+      DropAll => segment.payload.length() > 0
+    }
+    if !drop_this {
+      sim.after(one_way, "c->s", () => server.on_segment(sim, segment))
+    }
+  })
+  server.set_emit(segment => {
+    sim.after(one_way, "s->c", () => client.on_segment(sim, segment))
+  })
+}
+
+///|
+/// A configuration whose retransmission timings are short enough to keep a test
+/// quick, with the RFC 6298 estimator still in charge of the later values.
+fn fast_rto_config(
+  mss : Int,
+  window : Int,
+  initial_seq : UInt,
+  initial_rto : @sim.Time,
+) -> @tcp.TcpConfig {
+  @tcp.TcpConfig::new(mss, window, initial_seq).with_rto(
+    initial_rto,
+    @sim.Time::from_ms(1L),
+    @sim.Time::from_s(60L),
+  )
+}
+
+///|
 /// A 10 Mbps, 5 ms path in both directions with a 1000-byte MSS, used by most of
 /// the tests below.
 fn make_pair(
@@ -35,6 +95,215 @@ fn make_pair(
     @net.QueueSpec::packets(64),
   )
   @tcp.LinkPair::new(sim, client_config, server_config, up, down, seed)
+}
+
+///|
+test "the round trip estimate converges on the path delay" {
+  let sim = @sim.Sim::new(1UL)
+  let client = @tcp.TcpConnection::new(
+    fast_rto_config(1000, 8192, 1000U, @sim.Time::from_ms(50L)),
+  )
+  let server = @tcp.TcpConnection::new(
+    fast_rto_config(1000, 8192, 5000U, @sim.Time::from_ms(50L)),
+  )
+  wire_loopback(sim, client, server, @sim.Time::from_ms(5L), DropNone)
+  server.listen()
+  client.connect(sim)
+  sim.run()
+  // The SYN exchange alone measures the path, so an estimate exists before any
+  // data is sent.
+  inspect(client.srtt().unwrap().render(), content="10.000ms")
+  client.send(sim, pattern_bytes(4000))
+  sim.run()
+  // Every sample on this path is 10 ms, so the estimate stays there and the
+  // variance shrinks towards zero.
+  inspect(client.srtt().unwrap().render(), content="10.000ms")
+  inspect(client.rto().ps <= 30_000_000_000L, content="true")
+  inspect(client.rtt_samples() > 1, content="true")
+}
+
+///|
+test "a lost data segment is retransmitted and the transfer completes" {
+  let sim = @sim.Sim::new(1UL)
+  let client = @tcp.TcpConnection::new(
+    fast_rto_config(1000, 8192, 1000U, @sim.Time::from_ms(50L)),
+  )
+  let server = @tcp.TcpConnection::new(
+    fast_rto_config(1000, 8192, 5000U, @sim.Time::from_ms(50L)),
+  )
+  // The second data segment never arrives.
+  wire_loopback(sim, client, server, @sim.Time::from_ms(5L), DropNth(2))
+  server.listen()
+  client.connect(sim)
+  sim.run()
+  let payload = pattern_bytes(4000)
+  client.send(sim, payload)
+  sim.run()
+  inspect(client.timeouts(), content="1")
+  inspect(client.retransmits(), content="1")
+  inspect(server.delivered() == payload, content="true")
+  inspect(client.bytes_acked(), content="4000")
+  // The handshake and the first data segment already measured the path, so the
+  // timer was at 25 ms (10 ms smoothed, 3.75 ms variance) when the loss was
+  // discovered, and backoff doubled it to 50 ms.
+  inspect(client.rto().render(), content="50.000ms")
+}
+
+///|
+test "only a segment sent once contributes a round trip sample" {
+  // Without loss every data segment is acknowledged in turn, so the handshake
+  // plus four segments produce five samples.
+  let clean_sim = @sim.Sim::new(1UL)
+  let clean_client = @tcp.TcpConnection::new(
+    fast_rto_config(1000, 8192, 1000U, @sim.Time::from_ms(50L)),
+  )
+  let clean_server = @tcp.TcpConnection::new(
+    fast_rto_config(1000, 8192, 5000U, @sim.Time::from_ms(50L)),
+  )
+  wire_loopback(
+    clean_sim,
+    clean_client,
+    clean_server,
+    @sim.Time::from_ms(5L),
+    DropNone,
+  )
+  clean_server.listen()
+  clean_client.connect(clean_sim)
+  clean_sim.run()
+  clean_client.send(clean_sim, pattern_bytes(4000))
+  clean_sim.run()
+  inspect(clean_client.rtt_samples(), content="5")
+  // With one segment lost, the retransmission is acknowledged by a cumulative
+  // ACK that also covers the segments behind it. Karn's algorithm throws that
+  // sample away, and the cumulative ACK only ever samples one segment, so the
+  // count is much lower even though the same bytes arrive.
+  let lossy_sim = @sim.Sim::new(1UL)
+  let lossy_client = @tcp.TcpConnection::new(
+    fast_rto_config(1000, 8192, 1000U, @sim.Time::from_ms(50L)),
+  )
+  let lossy_server = @tcp.TcpConnection::new(
+    fast_rto_config(1000, 8192, 5000U, @sim.Time::from_ms(50L)),
+  )
+  wire_loopback(
+    lossy_sim,
+    lossy_client,
+    lossy_server,
+    @sim.Time::from_ms(5L),
+    DropNth(2),
+  )
+  lossy_server.listen()
+  lossy_client.connect(lossy_sim)
+  lossy_sim.run()
+  lossy_client.send(lossy_sim, pattern_bytes(4000))
+  lossy_sim.run()
+  inspect(lossy_client.rtt_samples(), content="2")
+}
+
+///|
+test "consecutive timeouts back off exponentially and then give up" {
+  let sim = @sim.Sim::new(1UL)
+  let client = @tcp.TcpConnection::new(
+    fast_rto_config(1000, 8192, 1000U, @sim.Time::from_ms(20L)),
+  )
+  let server = @tcp.TcpConnection::new(
+    fast_rto_config(1000, 8192, 5000U, @sim.Time::from_ms(20L)),
+  )
+  // Every data segment is dropped, so the connection can never make progress.
+  wire_loopback(sim, client, server, @sim.Time::from_ms(5L), DropAll)
+  server.listen()
+  client.connect(sim)
+  sim.run()
+  client.send(sim, pattern_bytes(1000))
+  sim.run()
+  // Eight retransmissions, each waiting twice as long as the last, and then the
+  // connection gives up rather than retrying forever.
+  inspect(client.timeouts(), content="9")
+  inspect(client.retransmits(), content="8")
+  inspect(client.state().render(), content="CLOSED")
+  // Eight doublings from the 30 ms the path measurement produced.
+  inspect(client.rto().render(), content="7.680s")
+}
+
+///|
+test "a lossy link still delivers every byte" {
+  let sim = @sim.Sim::new(4UL)
+  let up = @net.LinkSpec::new(
+    "up",
+    10_000_000L,
+    @sim.Time::from_ms(5L),
+    @net.QueueSpec::packets(64),
+  ).with_loss(0.05)
+  let down = @net.LinkSpec::new(
+    "down",
+    10_000_000L,
+    @sim.Time::from_ms(5L),
+    @net.QueueSpec::packets(64),
+  ).with_loss(0.02)
+  let pair = @tcp.LinkPair::new(
+    sim,
+    @tcp.TcpConfig::new(1000, 8192, 1000U),
+    @tcp.TcpConfig::new(1000, 8192, 5000U),
+    up,
+    down,
+    4UL,
+  )
+  pair.connect(sim)
+  sim.run()
+  let payload = pattern_bytes(20_000)
+  pair.client.send(sim, payload)
+  sim.run()
+  inspect(pair.server.delivered() == payload, content="true")
+  inspect(pair.client.retransmits() > 0, content="true")
+  inspect(pair.client.bytes_acked(), content="20000")
+  inspect(pair.up.lost() > 0, content="true")
+}
+
+///|
+test "a lossy run is still reproducible" {
+  let first_sim = @sim.Sim::new(11UL)
+  let second_sim = @sim.Sim::new(11UL)
+  let spec = @net.LinkSpec::new(
+    "up",
+    10_000_000L,
+    @sim.Time::from_ms(5L),
+    @net.QueueSpec::packets(64),
+  ).with_loss(0.07)
+  let down = @net.LinkSpec::new(
+    "down",
+    10_000_000L,
+    @sim.Time::from_ms(5L),
+    @net.QueueSpec::packets(64),
+  )
+  let first = @tcp.LinkPair::new(
+    first_sim,
+    @tcp.TcpConfig::new(1000, 8192, 1000U),
+    @tcp.TcpConfig::new(1000, 8192, 5000U),
+    spec,
+    down,
+    11UL,
+  )
+  let second = @tcp.LinkPair::new(
+    second_sim,
+    @tcp.TcpConfig::new(1000, 8192, 1000U),
+    @tcp.TcpConfig::new(1000, 8192, 5000U),
+    spec,
+    down,
+    11UL,
+  )
+  first.connect(first_sim)
+  second.connect(second_sim)
+  first_sim.run()
+  second_sim.run()
+  first.client.send(first_sim, pattern_bytes(10_000))
+  second.client.send(second_sim, pattern_bytes(10_000))
+  first_sim.run()
+  second_sim.run()
+  inspect(first.client.retransmits(), content="1")
+  inspect(
+    first.client.retransmits() == second.client.retransmits(),
+    content="true",
+  )
+  inspect(first.server.delivered() == second.server.delivered(), content="true")
 }
 
 ///|

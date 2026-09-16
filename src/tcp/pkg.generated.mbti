@@ -68,8 +68,13 @@ pub(all) struct TcpConfig {
   receive_window : Int
   initial_seq : UInt
   two_msl : @sim.Time
+  rto_initial : @sim.Time
+  rto_min : @sim.Time
+  rto_max : @sim.Time
+  max_retransmits : Int
 } derive(Eq, @debug.Debug)
 pub fn TcpConfig::new(Int, Int, UInt) -> Self
+pub fn TcpConfig::with_rto(Self, @sim.Time, @sim.Time, @sim.Time) -> Self
 
 pub(all) struct TcpConnection {
   config : TcpConfig
@@ -90,6 +95,16 @@ pub(all) struct TcpConnection {
   mut bytes_sent : Int
   mut bytes_acked : Int
   mut duplicate_acks : Int
+  mut retransmits : Int
+  mut timeouts : Int
+  mut consecutive_timeouts : Int
+  mut rtt_samples : Int
+  mut srtt_ps : Double
+  mut rttvar_ps : Double
+  mut has_rtt_sample : Bool
+  mut rto : @sim.Time
+  mut timer_running : Bool
+  mut timer_generation : Int
 }
 pub fn TcpConnection::bytes_acked(Self) -> Int
 pub fn TcpConnection::bytes_sent(Self) -> Int
@@ -103,13 +118,19 @@ pub fn TcpConnection::new(TcpConfig) -> Self
 pub fn TcpConnection::on_segment(Self, @sim.Sim, Segment) -> Unit
 pub fn TcpConnection::peer_window(Self) -> Int
 pub fn TcpConnection::rcv_nxt(Self) -> Seq
+pub fn TcpConnection::retransmits(Self) -> Int
+pub fn TcpConnection::rto(Self) -> @sim.Time
+pub fn TcpConnection::rtt_samples(Self) -> Int
 pub fn TcpConnection::segments_received(Self) -> Int
 pub fn TcpConnection::segments_sent(Self) -> Int
 pub fn TcpConnection::send(Self, @sim.Sim, Bytes) -> Unit
 pub fn TcpConnection::set_emit(Self, (Segment) -> Unit) -> Unit
 pub fn TcpConnection::snd_nxt(Self) -> Seq
 pub fn TcpConnection::snd_una(Self) -> Seq
+pub fn TcpConnection::srtt(Self) -> @sim.Time?
 pub fn TcpConnection::state(Self) -> TcpState
+pub fn TcpConnection::timeouts(Self) -> Int
+pub fn TcpConnection::timer_running(Self) -> Bool
 
 pub(all) enum TcpState {
   Closed

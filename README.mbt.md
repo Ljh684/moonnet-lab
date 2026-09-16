@@ -17,9 +17,10 @@ moonnet-lab 把网络行为建模成纯函数：给定拓扑、流量、参数�
 | 模块 | 内容 | 状态 |
 | --- | --- | --- |
 | `src/sim` | 虚拟时间、确定性事件队列、可复现随机源 | 完成 |
-| `src/net` | 数据包、有界队列（drop-tail）、链路（带宽/延迟/抖动） | 完成 |
+| `src/net` | 数据包、有界队列（drop-tail）、链路（带宽/延迟/抖动/丢包） | 完成 |
 | `src/tcp` | 连接状态机、三次握手、序号与累计确认、滑动窗口、乱序重组 | 完成 |
-| `src/tcp` | 超时重传、快速重传 | 下一步 |
+| `src/tcp` | RTO 估计（RFC 6298）、Karn 算法、超时重传与指数退避 | 完成 |
+| `src/tcp` | 快速重传与快速恢复 | 下一步 |
 | `src/cc` | Reno / CUBIC / Vegas 拥塞控制 | 计划中 |
 | `src/aqm` | RED、CoDel 队列管理 | 计划中 |
 | `src/report` | JSON 指标与 SVG 图表 | 计划中 |
@@ -32,6 +33,7 @@ moonnet-lab 把网络行为建模成纯函数：给定拓扑、流量、参数�
 moon test                        # 运行全部测试
 moon run cmd/moonnet -- demo     # 跑一个内置场景并打印报告
 moon run cmd/moonnet -- tcp      # 跑一次完整的 TCP 握手与批量传输
+moon run cmd/moonnet -- lossy    # 同一场景，无丢包 vs 1% 丢包对比
 ```
 
 demo 的输出：
@@ -57,6 +59,18 @@ segments: 24 sent, 23 received
 ```
 
 34.6 毫秒这个数字可以直接验算：接收窗口 8192 字节、MSS 1000 字节，最多 8 个段同时在途，20 个段需要大约三次往返，而一次往返是 10 毫秒加上链路的串行化时间。同样地，它也是一条回归测试。
+
+`lossy` 子命令把同一个场景跑两遍——一遍干净，一遍每条链路丢 1% 的包：
+
+```text
+clean path: 50000 bytes in 1.310s (305.1 kbit/s), 0 retransmissions
+1% loss:    50000 bytes in 3.304s (121.0 kbit/s), 2 retransmissions, 2 timeouts
+
+estimator:  46 round trip samples, RTO 1.000s
+smoothed:   53.533ms round trip time
+```
+
+一成的数据改变，2.5 倍的传输时间。原因写在最后两行里：往返时间测出来是 53 毫秒，但 RTO 停在 1 秒——RFC 6298 规定连接在建立初期必须按最坏情况估计超时，所以每个丢失的包要等满一秒才被重传。这个"损失一个包就等于损失一秒"的现象，是后面做拥塞控制对比时最先要解释的东西：CUBIC 和 Vegas 的价值不在于更快发现丢包，而在于不要因为一次丢包就把速度砍半。
 
 ## 确定性是怎么保证的
 

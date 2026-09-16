@@ -13,6 +13,7 @@ fn main {
     "version" => println(version_line())
     "demo" => demo()
     "tcp" => tcp_demo()
+    "lossy" => lossy_demo()
     "help" | "-h" | "--help" => usage()
     _ => {
       println("unknown command: " + command)
@@ -36,6 +37,7 @@ fn usage() -> Unit {
   println("commands:")
   println("  demo      run the built-in three-flow demo and print a report")
   println("  tcp       run a TCP handshake and bulk transfer over two links")
+  println("  lossy     run the same transfer over a path that loses packets")
   println("  version   print the version")
   println("  help      print this message")
 }
@@ -94,6 +96,135 @@ fn tcp_demo() -> Unit {
     pair.client.segments_received().to_string() +
     " received",
   )
+}
+
+///|
+/// What one run of the bulk transfer produced.
+struct TransferResult {
+  delivered : Int
+  elapsed : @sim.Time
+  retransmits : Int
+  timeouts : Int
+  rto : @sim.Time
+  srtt : @sim.Time?
+  samples : Int
+  uplink : String
+  downlink : String
+}
+
+///|
+/// Run one bulk transfer over a pair of links and collect the numbers.
+fn run_transfer(
+  seed : UInt64,
+  up : @net.LinkSpec,
+  down : @net.LinkSpec,
+  payload_bytes : Int,
+) -> TransferResult {
+  let sim = @sim.Sim::new(seed)
+  let pair = @tcp.LinkPair::new(
+    sim,
+    @tcp.TcpConfig::new(1000, 8192, 1000U),
+    @tcp.TcpConfig::new(1000, 8192, 5000U),
+    up,
+    down,
+    seed,
+  )
+  pair.connect(sim)
+  sim.run()
+  let start = sim.now()
+  pair.client.send(sim, Bytes::make(payload_bytes, b'x'))
+  sim.run()
+  {
+    delivered: pair.server.delivered().length(),
+    elapsed: sim.now() - start,
+    retransmits: pair.client.retransmits(),
+    timeouts: pair.client.timeouts(),
+    rto: pair.client.rto(),
+    srtt: pair.client.srtt(),
+    samples: pair.client.rtt_samples(),
+    uplink: pair.up.summary(sim),
+    downlink: pair.down.summary(sim),
+  }
+}
+
+///|
+/// The same bulk transfer, over a longer path that loses packets in both
+/// directions.
+///
+/// The transfer runs twice over exactly the same path: once clean, once with 1%
+/// loss. The difference between the two lines is what retransmission costs, and
+/// it is where the RFC 6298 floor on the initial RTO stops being a footnote: a
+/// packet that goes missing costs a full second, because a connection is
+/// required to assume the worst until it has measured the path.
+fn lossy_demo() -> Unit {
+  let seed = 9UL
+  let payload_bytes = 50_000
+  let one_way = @sim.Time::from_ms(25L)
+  let up = @net.LinkSpec::new(
+    "up",
+    10_000_000L,
+    one_way,
+    @net.QueueSpec::packets(64),
+  )
+  let down = @net.LinkSpec::new(
+    "down",
+    10_000_000L,
+    one_way,
+    @net.QueueSpec::packets(64),
+  )
+  let clean = run_transfer(seed, up, down, payload_bytes)
+  let lossy = run_transfer(
+    seed,
+    up.with_loss(0.01),
+    down.with_loss(0.01),
+    payload_bytes,
+  )
+  println(version_line())
+  println("")
+  println(
+    "path:       10 Mbps, 25 ms one way (50 ms round trip), 8192 B window",
+  )
+  println(
+    "payload:    " + payload_bytes.to_string() + " bytes, 1000-byte segments",
+  )
+  println("")
+  println(
+    "clean path: " +
+    clean.delivered.to_string() +
+    " bytes in " +
+    clean.elapsed.render() +
+    " (" +
+    goodput_kbps(payload_bytes, clean.elapsed) +
+    " kbit/s), " +
+    clean.retransmits.to_string() +
+    " retransmissions",
+  )
+  println(
+    "1% loss:    " +
+    lossy.delivered.to_string() +
+    " bytes in " +
+    lossy.elapsed.render() +
+    " (" +
+    goodput_kbps(payload_bytes, lossy.elapsed) +
+    " kbit/s), " +
+    lossy.retransmits.to_string() +
+    " retransmissions, " +
+    lossy.timeouts.to_string() +
+    " timeouts",
+  )
+  println("")
+  println(
+    "estimator:  " +
+    lossy.samples.to_string() +
+    " round trip samples, RTO " +
+    lossy.rto.render(),
+  )
+  match lossy.srtt {
+    Some(srtt) => println("smoothed:   " + srtt.render() + " round trip time")
+    None => println("smoothed:   no sample")
+  }
+  println("uplink:     " + lossy.uplink)
+  println("downlink:   " + lossy.downlink)
 }
 
 ///|
