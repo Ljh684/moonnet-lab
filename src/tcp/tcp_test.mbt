@@ -37,6 +37,8 @@ fn wire_loopback(
   one_way : @sim.Time,
   drop : DropSpec,
 ) -> Unit {
+  // This harness compares the delivered byte stream against what was sent.
+  server.capture_delivered(true)
   let mut data_count = 0
   client.set_emit(segment => {
     let is_data = segment.payload.length() > 0
@@ -98,7 +100,172 @@ fn make_pair(
     @sim.Time::from_ms(5L),
     @net.QueueSpec::packets(64),
   )
-  @tcp.LinkPair::new(sim, client_config, server_config, up, down, seed)
+  let pair = @tcp.LinkPair::new(
+    sim, client_config, server_config, up, down, seed,
+  )
+  pair.server.capture_delivered(true)
+  pair
+}
+
+///|
+/// Run a bulk transfer over a long fat path with a chosen algorithm and report
+/// how long it took.
+fn long_fat_transfer(
+  cc : &@tcp.CongestionControl,
+  loss : Double,
+  payload_bytes : Int,
+) -> (@sim.Time, @tcp.LinkPair) {
+  let sim = @sim.Sim::new(9UL)
+  let up = @net.LinkSpec::new(
+    "up",
+    100_000_000L,
+    @sim.Time::from_ms(50L),
+    @net.QueueSpec::packets(2000),
+  ).with_loss(loss)
+  let down = @net.LinkSpec::new(
+    "down",
+    100_000_000L,
+    @sim.Time::from_ms(50L),
+    @net.QueueSpec::packets(2000),
+  ).with_loss(loss)
+  let pair = @tcp.LinkPair::new_with_cc(
+    sim,
+    @tcp.TcpConfig::new(1000, 2_000_000, 1000U),
+    @tcp.TcpConfig::new(1000, 2_000_000, 5000U),
+    up,
+    down,
+    9UL,
+    cc,
+  )
+  pair.connect(sim)
+  sim.step_until(() => pair.client.state() == @tcp.Established) |> ignore
+  let start = sim.now()
+  pair.client.send(sim, Bytes::make(payload_bytes, b'x'))
+  sim.step_until(() => pair.server.delivered_bytes() == payload_bytes) |> ignore
+  (sim.now() - start, pair)
+}
+
+///|
+test "cubic keeps more of its window than reno when a packet is lost" {
+  let payload = pattern_bytes(8000)
+  let reno = @sim.Sim::new(1UL)
+  let reno_client = @tcp.TcpConnection::new(
+    @tcp.TcpConfig::new(1000, 64_000, 1000U),
+  )
+  let reno_server = @tcp.TcpConnection::new(
+    @tcp.TcpConfig::new(1000, 64_000, 5000U),
+  )
+  wire_loopback(
+    reno,
+    reno_client,
+    reno_server,
+    @sim.Time::from_ms(25L),
+    DropNth(2),
+  )
+  reno_server.listen()
+  reno_client.connect(reno)
+  reno.run()
+  reno_client.send(reno, payload)
+  reno.step_until(() => reno_client.in_recovery()) |> ignore
+  let cubic = @sim.Sim::new(1UL)
+  let cubic_client = @tcp.TcpConnection::new_with_cc(
+    @tcp.TcpConfig::new(1000, 64_000, 1000U),
+    @tcp.cubic(1000),
+  )
+  let cubic_server = @tcp.TcpConnection::new(
+    @tcp.TcpConfig::new(1000, 64_000, 5000U),
+  )
+  wire_loopback(
+    cubic,
+    cubic_client,
+    cubic_server,
+    @sim.Time::from_ms(25L),
+    DropNth(2),
+  )
+  cubic_server.listen()
+  cubic_client.connect(cubic)
+  cubic.run()
+  cubic_client.send(cubic, payload)
+  cubic.step_until(() => cubic_client.in_recovery()) |> ignore
+  // Both connections have seven segments in flight when the hole is found, so
+  // the thresholds differ only by the multiplicative decrease factor: Reno
+  // halves 7000 bytes to 3500, CUBIC keeps 70% of it, which is 4.9 segments and
+  // truncates to 4 — windows are whole segments, as they are in a real stack.
+  inspect(reno_client.inflight(), content="7")
+  inspect(cubic_client.inflight(), content="7")
+  inspect(reno_client.ssthresh(), content="3500")
+  inspect(cubic_client.ssthresh(), content="4000")
+  inspect(cubic_client.ssthresh() > reno_client.ssthresh(), content="true")
+  inspect(cubic_client.cc_name(), content="cubic")
+  inspect(cubic_client.cc_phase(), content="fast recovery")
+}
+
+///|
+test "cubic collapses to one segment on timeout, like reno" {
+  let sim = @sim.Sim::new(1UL)
+  let client = @tcp.TcpConnection::new_with_cc(
+    @tcp.TcpConfig::new(1000, 64_000, 1000U),
+    @tcp.cubic(1000),
+  )
+  let server = @tcp.TcpConnection::new(@tcp.TcpConfig::new(1000, 64_000, 5000U))
+  wire_loopback(sim, client, server, @sim.Time::from_ms(25L), DropAll)
+  server.listen()
+  client.connect(sim)
+  sim.run()
+  client.send(sim, pattern_bytes(10_000))
+  sim.step_until(() => client.timeouts() > 0) |> ignore
+  // Ten segments were in flight, so the threshold keeps 70% of that and the
+  // window restarts from a single segment.
+  inspect(client.ssthresh(), content="7000")
+  inspect(client.cwnd(), content="1000")
+  inspect(client.cc_phase(), content="slow start")
+}
+
+///|
+test "cubic climbs back past the window it was cut to" {
+  let sim = @sim.Sim::new(1UL)
+  let client = @tcp.TcpConnection::new_with_cc(
+    @tcp.TcpConfig::new(1000, 64_000, 1000U),
+    @tcp.cubic(1000),
+  )
+  let server = @tcp.TcpConnection::new(@tcp.TcpConfig::new(1000, 64_000, 5000U))
+  wire_loopback(sim, client, server, @sim.Time::from_ms(25L), DropNth(2))
+  server.listen()
+  client.connect(sim)
+  sim.run()
+  client.send(sim, pattern_bytes(200_000))
+  sim.step_until(() => client.in_recovery()) |> ignore
+  let reduced = client.ssthresh()
+  inspect(reduced, content="8000")
+  inspect(client.cwnd(), content="11000")
+  // Once the hole is repaired the window deflates to the threshold and the cubic
+  // curve starts climbing from there.
+  sim.step_until(() => !client.in_recovery()) |> ignore
+  inspect(client.cwnd() >= reduced, content="true")
+  sim.step_until(() => client.cwnd() > reduced) |> ignore
+  inspect(client.cwnd() > reduced, content="true")
+  inspect(server.delivered_bytes() > 0, content="true")
+}
+
+///|
+test "cubic outruns reno on a long fat path that keeps losing packets" {
+  let payload_bytes = 20_000_000
+  let (reno_elapsed, _reno_pair) = long_fat_transfer(
+    @tcp.reno(1000),
+    0.01,
+    payload_bytes,
+  )
+  let (cubic_elapsed, cubic_pair) = long_fat_transfer(
+    @tcp.cubic(1000),
+    0.01,
+    payload_bytes,
+  )
+  // Reno's window keeps collapsing to a single segment, so it spends most of the
+  // transfer climbing back; CUBIC holds its window and times out far less often.
+  inspect(cubic_elapsed.ps < reno_elapsed.ps, content="true")
+  inspect(cubic_pair.client.timeouts() < 10, content="true")
+  inspect(cubic_pair.server.delivered_bytes(), content="20000000")
+  inspect(_reno_pair.server.delivered_bytes(), content="20000000")
 }
 
 ///|
@@ -129,7 +296,7 @@ test "the congestion window limits the first burst, not the receive window" {
   inspect(client.bytes_sent(), content="10000")
   inspect(client.inflight(), content="10")
   sim.run()
-  inspect(server.delivered().length(), content="64000")
+  inspect(server.delivered_bytes(), content="64000")
 }
 
 ///|
@@ -148,7 +315,7 @@ test "no congestion control leaves the receive window as the only limit" {
   // Every byte the receiver offered goes out in one burst.
   inspect(client.bytes_sent(), content="64000")
   sim.run()
-  inspect(server.delivered().length(), content="64000")
+  inspect(server.delivered_bytes(), content="64000")
   inspect(client.cc_name(), content="none")
 }
 
@@ -244,7 +411,7 @@ test "three duplicate acknowledgments retransmit without waiting for the timer" 
   // Measure until the last byte reaches the receiver. Draining the queue would
   // advance the clock to whatever stale timer the recovery left behind.
   inspect(
-    sim.step_until(() => server.delivered().length() == 8000),
+    sim.step_until(() => server.delivered_bytes() == 8000),
     content="true",
   )
   // The repair costs about two round trips: 100 ms of a 50 ms path, against a
@@ -458,6 +625,7 @@ test "a lossy link still delivers every byte" {
   pair.connect(sim)
   sim.run()
   let payload = pattern_bytes(20_000)
+  pair.server.capture_delivered(true)
   pair.client.send(sim, payload)
   sim.run()
   inspect(pair.server.delivered() == payload, content="true")
@@ -500,6 +668,8 @@ test "a lossy run is still reproducible" {
   )
   first.connect(first_sim)
   second.connect(second_sim)
+  first.server.capture_delivered(true)
+  second.server.capture_delivered(true)
   first_sim.run()
   second_sim.run()
   first.client.send(first_sim, pattern_bytes(10_000))
@@ -560,7 +730,7 @@ test "a byte stream arrives complete and in order" {
   let payload = pattern_bytes(5000)
   pair.client.send(sim, payload)
   sim.run()
-  inspect(pair.server.delivered().length(), content="5000")
+  inspect(pair.server.delivered_bytes(), content="5000")
   inspect(pair.server.delivered() == payload, content="true")
   inspect(pair.client.bytes_acked(), content="5000")
   inspect(pair.client.inflight(), content="0")
@@ -579,13 +749,14 @@ test "the receiver window caps how much can be in flight" {
   inspect(pair.client.bytes_acked(), content="0")
   sim.run()
   inspect(pair.client.bytes_acked(), content="5000")
-  inspect(pair.server.delivered().length(), content="5000")
+  inspect(pair.server.delivered_bytes(), content="5000")
 }
 
 ///|
 test "out of order segments are buffered and then delivered in order" {
   let sim = @sim.Sim::new(1UL)
   let server = @tcp.TcpConnection::new(@tcp.TcpConfig::new(1000, 4096, 5000U))
+  server.capture_delivered(true)
   server.listen()
   // Complete a handshake by hand so the receiver has a known sequence base.
   server.on_segment(
@@ -612,7 +783,7 @@ test "out of order segments are buffered and then delivered in order" {
       second,
     ),
   )
-  inspect(server.delivered().length(), content="0")
+  inspect(server.delivered_bytes(), content="0")
   inspect(server.rcv_nxt().to_string(), content="1001")
   // Filling the gap releases both segments, in order.
   server.on_segment(
@@ -625,7 +796,7 @@ test "out of order segments are buffered and then delivered in order" {
       first,
     ),
   )
-  inspect(server.delivered().length(), content="200")
+  inspect(server.delivered_bytes(), content="200")
   inspect(server.delivered() == first.add(second), content="true")
   inspect(server.rcv_nxt().to_string(), content="1201")
 }
@@ -654,10 +825,10 @@ test "a retransmitted segment is acknowledged but not delivered twice" {
     payload,
   )
   server.on_segment(sim, segment)
-  inspect(server.delivered().length(), content="100")
+  inspect(server.delivered_bytes(), content="100")
   let before = server.duplicate_acks()
   server.on_segment(sim, segment)
-  inspect(server.delivered().length(), content="100")
+  inspect(server.delivered_bytes(), content="100")
   inspect(server.duplicate_acks() > before, content="true")
 }
 

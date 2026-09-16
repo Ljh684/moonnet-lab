@@ -6,6 +6,8 @@ package "Ljh684/moonnet-lab/cmd/moonnet"
 // Errors
 
 // Types and methods
+type Scenario
+
 type TransferResult
 
 // Type aliases

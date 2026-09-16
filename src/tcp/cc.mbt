@@ -20,8 +20,10 @@ pub(open) trait CongestionControl {
   /// Which phase the algorithm is in, for reports.
   fn phase(Self) -> String
   /// New data was acknowledged. `rtt_ps` is zero when no usable round trip
-  /// sample accompanied the acknowledgment.
-  fn on_ack(Self, acked_bytes : Int, mss : Int, rtt_ps : Int64) -> Unit
+  /// sample accompanied the acknowledgment, and `now_ps` is the virtual time at
+  /// which it arrived — algorithms that grow as a function of time rather than
+  /// of acknowledgments need it.
+  fn on_ack(Self, acked_bytes : Int, mss : Int, rtt_ps : Int64, now_ps : Int64) -> Unit
   /// Duplicate acknowledgments revealed a hole.
   fn on_fast_retransmit(Self, flight_size : Int, mss : Int) -> Unit
   /// Another duplicate acknowledgment arrived while recovering. Acknowledging
@@ -70,6 +72,12 @@ pub fn reno(mss : Int) -> &CongestionControl {
 }
 
 ///|
+/// CUBIC, ready to hand to `TcpConnection::new_with_cc`.
+pub fn cubic(mss : Int) -> &CongestionControl {
+  Cubic::new(mss) as &CongestionControl
+}
+
+///|
 impl CongestionControl for NoCongestionControl with fn window(self) {
   self.limit
 }
@@ -95,6 +103,7 @@ impl CongestionControl for NoCongestionControl with fn on_ack(
   _acked_bytes,
   _mss,
   _rtt_ps,
+  _now_ps,
 ) {
   ()
 }

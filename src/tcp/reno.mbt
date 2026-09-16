@@ -72,7 +72,13 @@ impl CongestionControl for Reno with fn phase(self) {
 /// Slow start adds one segment per acknowledged segment; congestion avoidance
 /// adds one segment per acknowledged *window*. The difference is the whole
 /// difference between probing a path and being polite to it.
-impl CongestionControl for Reno with fn on_ack(self, acked_bytes, mss, _rtt_ps) {
+impl CongestionControl for Reno with fn on_ack(
+  self,
+  acked_bytes,
+  mss,
+  _rtt_ps,
+  _now_ps,
+) {
   if self.in_recovery {
     return
   }

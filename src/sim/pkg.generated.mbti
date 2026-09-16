@@ -47,6 +47,7 @@ pub(all) struct Sim {
 }
 pub fn Sim::after(Self, Time, String, () -> Unit) -> Unit
 pub fn Sim::at(Self, Time, String, () -> Unit) -> Unit
+pub fn Sim::is_recording(Self) -> Bool
 pub fn Sim::journal(Self) -> Array[String]
 pub fn Sim::new(UInt64) -> Self
 pub fn Sim::note(Self, String) -> Unit

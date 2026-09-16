@@ -3,6 +3,7 @@
 import {
   "Ljh684/moonnet-lab/src/sim",
   "Ljh684/moonnet-lab/src/net",
+  "moonbitlang/core/math",
 }
 
 import {

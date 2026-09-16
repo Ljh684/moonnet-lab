@@ -140,10 +140,37 @@ pub(all) struct TcpConnection {
   mut rcv_nxt : Seq
   mut peer_window : Int
   mut send_queue : Bytes
+  /// How much of `send_queue` has already been sent. The unsent bytes are
+  /// `send_queue[send_offset..]`.
+  ///
+  /// Copying the remaining bytes after every segment would be correct and
+  /// catastrophically slow: a four megabyte transfer becomes eight gigabytes of
+  /// memcpy, and the cost only appears once windows grow, which is exactly what
+  /// a long fat path does.
+  mut send_offset : Int
   mut fin_seq : Seq?
   mut peer_fin : Bool
-  inflight : Array[InFlight]
+  mut inflight : Array[InFlight]
+  /// Index of the oldest segment still waiting for an acknowledgment. Entries
+  /// before it are retired but still occupy array slots until the next
+  /// compaction.
+  mut inflight_head : Int
   reorder : Array[Buffered]
+  /// Bytes currently held out of order. Kept as a running total rather than
+  /// summed on demand: the advertised window is computed for every segment the
+  /// connection sends, and summing a two-thousand entry buffer each time turns a
+  /// long fat path into a quadratic workload.
+  mut reorder_bytes : Int
+  /// Everything delivered to the application so far, but only if the caller
+  /// asked for it.
+  ///
+  /// Retaining every byte unconditionally is both a memory leak and a quadratic
+  /// copy: appending to a growing buffer copies it, so a four megabyte transfer
+  /// becomes eight gigabytes of memcpy. Tests and demos that need to inspect the
+  /// byte stream opt in; everything else only pays for a counter.
+  mut capture : Bool
+  /// Bytes delivered to the application, always counted.
+  mut delivered_bytes : Int
   mut delivered : Bytes
   mut segments_sent : Int
   mut segments_received : Int
@@ -207,10 +234,15 @@ pub fn TcpConnection::new_with_cc(
     rcv_nxt: iss,
     peer_window: 0,
     send_queue: Bytes::new(0),
+    send_offset: 0,
     fin_seq: None,
     peer_fin: false,
     inflight: [],
+    inflight_head: 0,
     reorder: [],
+    reorder_bytes: 0,
+    capture: false,
+    delivered_bytes: 0,
     delivered: Bytes::new(0),
     segments_sent: 0,
     segments_received: 0,
@@ -269,10 +301,31 @@ pub fn TcpConnection::send(
   sim : @sim.Sim,
   data : Bytes,
 ) -> Unit {
-  if data.length() > 0 {
-    self.send_queue = self.send_queue.add(data)
-  }
+  self.enqueue_data(data)
   self.pump(sim)
+}
+
+///|
+/// Append application data to the send buffer.
+///
+/// The buffer is only compacted when it is either fully consumed or about to be
+/// appended to with a stale prefix in front of it, so the common cases — send
+/// once and drain, or send repeatedly into an empty buffer — do not copy the
+/// bytes still waiting to go out.
+fn TcpConnection::enqueue_data(self : TcpConnection, data : Bytes) -> Unit {
+  if data.length() == 0 {
+    return
+  }
+  if self.send_offset >= self.send_queue.length() {
+    self.send_queue = data
+    self.send_offset = 0
+    return
+  }
+  if self.send_offset > 0 {
+    self.send_queue = bytes_drop(self.send_queue, self.send_offset)
+    self.send_offset = 0
+  }
+  self.send_queue = self.send_queue.add(data)
 }
 
 ///|
@@ -301,7 +354,9 @@ pub fn TcpConnection::on_segment(
   segment : Segment,
 ) -> Unit {
   self.segments_received = self.segments_received + 1
-  sim.note("recv  " + segment.label())
+  if sim.is_recording() {
+    sim.note("recv  " + segment.label())
+  }
   if segment.flags.rst {
     self.state = Closed
     return
@@ -427,23 +482,27 @@ fn TcpConnection::process_ack(
   // Karn's algorithm: the acknowledgment covers the byte range, not a copy of
   // it, so a segment that had to be sent twice yields no usable round-trip
   // sample.
+  //
+  // Only the head of the queue is examined, and only entries that are now fully
+  // acknowledged are retired. Scanning the whole in-flight queue for every
+  // acknowledgment would be correct and quadratic: on a path whose window grows
+  // into the thousands of segments, most of the run would be spent walking a
+  // list whose length grows with the transfer.
   let mut sample : Int64? = None
-  for entry in self.inflight {
-    if entry.seq == old_una && !entry.retransmitted {
+  let mut acknowledged_bytes = 0
+  while self.inflight_head < self.inflight.length() {
+    let entry = self.inflight[self.inflight_head]
+    if entry.seq.advance(entry.sequence_length).after(ack) {
+      break
+    }
+    if !entry.retransmitted && entry.seq == old_una {
       sample = Some(sim.now().ps - entry.sent_at.ps)
     }
+    self.bytes_acked = self.bytes_acked + entry.payload.length()
+    acknowledged_bytes = acknowledged_bytes + entry.payload.length()
+    self.inflight_head = self.inflight_head + 1
   }
-  let mut index = self.inflight.length()
-  let mut acknowledged_bytes = 0
-  while index > 0 {
-    index = index - 1
-    let entry = self.inflight[index]
-    if !entry.seq.advance(entry.sequence_length).after(ack) {
-      self.bytes_acked = self.bytes_acked + entry.payload.length()
-      acknowledged_bytes = acknowledged_bytes + entry.payload.length()
-      self.inflight.remove(index) |> ignore
-    }
-  }
+  self.compact_inflight()
   let mut round_trip = 0L
   match sample {
     Some(measured) => {
@@ -452,7 +511,7 @@ fn TcpConnection::process_ack(
     }
     None => ()
   }
-  self.cc.on_ack(acknowledged_bytes, self.config.mss, round_trip)
+  self.cc.on_ack(acknowledged_bytes, self.config.mss, round_trip, sim.now().ps)
   self.dup_ack_count = 0
   match self.state {
     SynReceived =>
@@ -488,7 +547,7 @@ fn TcpConnection::process_ack(
   // Acknowledged progress clears the retransmission streak, and the timer now
   // either covers what is left in flight or stops entirely.
   self.consecutive_timeouts = 0
-  if self.inflight.length() == 0 {
+  if self.inflight_is_empty() {
     self.disarm_timer()
   } else {
     self.arm_timer(sim)
@@ -518,7 +577,7 @@ fn TcpConnection::on_duplicate_ack(
   self : TcpConnection,
   sim : @sim.Sim,
 ) -> Unit {
-  if self.dup_ack_count < 3 || self.inflight.length() == 0 {
+  if self.dup_ack_count < 3 || self.inflight_is_empty() {
     return
   }
   if self.in_recovery {
@@ -612,7 +671,7 @@ fn TcpConnection::on_timeout(
   if generation != self.timer_generation {
     return
   }
-  if self.state == Closed || self.inflight.length() == 0 {
+  if self.state == Closed || self.inflight_is_empty() {
     self.timer_running = false
     return
   }
@@ -656,10 +715,10 @@ fn TcpConnection::retransmit_oldest(
   self : TcpConnection,
   sim : @sim.Sim,
 ) -> Unit {
-  if self.inflight.length() == 0 {
+  if self.inflight_is_empty() {
     return
   }
-  let entry = self.inflight[0]
+  let entry = self.inflight[self.inflight_head]
   let segment = Segment::new(
     entry.seq,
     self.rcv_nxt,
@@ -667,10 +726,16 @@ fn TcpConnection::retransmit_oldest(
     entry.flags,
     entry.payload,
   )
-  self.inflight[0] = { ..entry, sent_at: sim.now(), retransmitted: true, }
+  self.inflight[self.inflight_head] = {
+    ..entry,
+    sent_at: sim.now(),
+    retransmitted: true,
+  }
   self.retransmits = self.retransmits + 1
   self.segments_sent = self.segments_sent + 1
-  sim.note("retx  " + segment.label())
+  if sim.is_recording() {
+    sim.note("retx  " + segment.label())
+  }
   (self.emit)(segment)
 }
 
@@ -694,7 +759,7 @@ fn TcpConnection::pump(self : TcpConnection, sim : @sim.Sim) -> Unit {
     return
   }
   while true {
-    let queued = self.send_queue.length()
+    let queued = self.send_queue.length() - self.send_offset
     if queued == 0 {
       break
     }
@@ -722,9 +787,9 @@ fn TcpConnection::pump(self : TcpConnection, sim : @sim.Sim) -> Unit {
     if take <= 0 {
       break
     }
-    let payload = bytes_slice(self.send_queue, 0, take)
+    let payload = bytes_slice(self.send_queue, self.send_offset, take)
     self.send_data(sim, payload)
-    self.send_queue = bytes_drop(self.send_queue, take)
+    self.send_offset = self.send_offset + take
   }
 }
 
@@ -754,7 +819,9 @@ fn TcpConnection::send_data(
   self.snd_nxt = self.snd_nxt.advance(payload.length())
   self.bytes_sent = self.bytes_sent + payload.length()
   self.segments_sent = self.segments_sent + 1
-  sim.note("send  " + segment.label())
+  if sim.is_recording() {
+    sim.note("send  " + segment.label())
+  }
   (self.emit)(segment)
   self.arm_timer(sim)
 }
@@ -789,7 +856,9 @@ fn TcpConnection::send_control(
     self.fin_seq = Some(seq)
   }
   self.segments_sent = self.segments_sent + 1
-  sim.note("send  " + segment.label())
+  if sim.is_recording() {
+    sim.note("send  " + segment.label())
+  }
   (self.emit)(segment)
   self.arm_timer(sim)
 }
@@ -809,7 +878,9 @@ fn TcpConnection::emit_ack(self : TcpConnection, sim : @sim.Sim) -> Unit {
     Bytes::new(0),
   )
   self.segments_sent = self.segments_sent + 1
-  sim.note("send  " + segment.label())
+  if sim.is_recording() {
+    sim.note("send  " + segment.label())
+  }
   (self.emit)(segment)
 }
 
@@ -830,11 +901,7 @@ fn TcpConnection::enter_time_wait(self : TcpConnection, sim : @sim.Sim) -> Unit 
 /// of order is subtracted, so a peer that keeps sending out of order is
 /// eventually told to stop.
 fn TcpConnection::advertised_window(self : TcpConnection) -> Int {
-  let mut buffered = 0
-  for entry in self.reorder {
-    buffered = buffered + entry.payload.length()
-  }
-  let free = self.config.receive_window - buffered
+  let free = self.config.receive_window - self.reorder_bytes
   if free < 0 {
     0
   } else {
@@ -848,7 +915,10 @@ fn TcpConnection::deliver(self : TcpConnection, payload : Bytes) -> Unit {
   if payload.length() == 0 {
     return
   }
-  self.delivered = self.delivered.add(payload)
+  self.delivered_bytes = self.delivered_bytes + payload.length()
+  if self.capture {
+    self.delivered = self.delivered.add(payload)
+  }
   self.rcv_nxt = self.rcv_nxt.advance(payload.length())
 }
 
@@ -865,6 +935,7 @@ fn TcpConnection::buffer_early(
     }
   }
   self.reorder.push({ seq, payload, })
+  self.reorder_bytes = self.reorder_bytes + payload.length()
 }
 
 ///|
@@ -890,6 +961,7 @@ fn TcpConnection::drain_reorder(self : TcpConnection) -> Unit {
       Some(position) => {
         let entry = self.reorder[position]
         self.reorder.remove(position) |> ignore
+        self.reorder_bytes = self.reorder_bytes - entry.payload.length()
         self.deliver(entry.payload)
       }
     }
@@ -921,6 +993,22 @@ pub fn TcpConnection::rcv_nxt(self : TcpConnection) -> Seq {
 /// The most recent window the peer advertised.
 pub fn TcpConnection::peer_window(self : TcpConnection) -> Int {
   self.peer_window
+}
+
+///|
+/// Ask the connection to retain the byte stream it delivers, so that a test can
+/// compare it against what was sent. Off by default; see the field comment.
+pub fn TcpConnection::capture_delivered(
+  self : TcpConnection,
+  enabled : Bool,
+) -> Unit {
+  self.capture = enabled
+}
+
+///|
+/// How many bytes have been delivered to the application, in order.
+pub fn TcpConnection::delivered_bytes(self : TcpConnection) -> Int {
+  self.delivered_bytes
 }
 
 ///|
@@ -960,7 +1048,33 @@ pub fn TcpConnection::duplicate_acks(self : TcpConnection) -> Int {
 ///|
 /// Segments still waiting for an acknowledgment.
 pub fn TcpConnection::inflight(self : TcpConnection) -> Int {
-  self.inflight.length()
+  self.inflight.length() - self.inflight_head
+}
+
+///|
+/// Whether every sent segment has been acknowledged.
+fn TcpConnection::inflight_is_empty(self : TcpConnection) -> Bool {
+  self.inflight_head >= self.inflight.length()
+}
+
+///|
+/// Drop retired entries once they take up more than half the array.
+///
+/// Retiring by moving a head index keeps acknowledgment handling constant time;
+/// this is what keeps the array itself from growing without bound over a long
+/// transfer. Compacting only when the waste is large keeps the cost amortised.
+fn TcpConnection::compact_inflight(self : TcpConnection) -> Unit {
+  if self.inflight_head < 64 || self.inflight_head * 2 < self.inflight.length() {
+    return
+  }
+  let remaining : Array[InFlight] = []
+  let mut index = self.inflight_head
+  while index < self.inflight.length() {
+    remaining.push(self.inflight[index])
+    index = index + 1
+  }
+  self.inflight = remaining
+  self.inflight_head = 0
 }
 
 ///|

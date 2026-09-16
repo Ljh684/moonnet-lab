@@ -77,7 +77,7 @@ fn tcp_demo() -> Unit {
   let handshake_done = sim.now()
   let payload = Bytes::make(20_000, b'x')
   pair.client.send(sim, payload)
-  sim.step_until(() => pair.server.delivered().length() == 20_000) |> ignore
+  sim.step_until(() => pair.server.delivered_bytes() == 20_000) |> ignore
   let transfer = sim.now() - handshake_done
   sim.run()
   println(version_line())
@@ -85,7 +85,7 @@ fn tcp_demo() -> Unit {
   println("handshake completed at " + handshake_done.render())
   println(
     "transferred " +
-    pair.server.delivered().length().to_string() +
+    pair.server.delivered_bytes().to_string() +
     " bytes in " +
     transfer.render() +
     " (" +
@@ -114,60 +114,137 @@ fn tcp_demo() -> Unit {
 /// network does not collapse when everyone does it at once.
 fn congestion_control_demo() -> Unit {
   let seed = 9UL
-  let payload_bytes = 200_000
-  let one_way = @sim.Time::from_ms(25L)
   println(version_line())
   println("")
-  println(
-    "path:    10 Mbps, 25 ms one way, 1% loss each way, 64 KB window, 16-packet queue",
-  )
-  println("payload: " + payload_bytes.to_string() + " bytes")
+  let small_buffer : Scenario = {
+    label: "small buffers: 10 Mbps, 25 ms one way, 1% loss, 64 KB window, 16-packet queue",
+    bandwidth_bps: 10_000_000L,
+    one_way: @sim.Time::from_ms(25L),
+    loss: 0.01,
+    receive_window: 64_000,
+    queue_packets: 16,
+    payload_bytes: 200_000,
+  }
+  let long_fat : Scenario = {
+    label: "long fat path: 100 Mbps, 50 ms one way, 1% loss, 2 MB window, 2000-packet queue",
+    bandwidth_bps: 100_000_000L,
+    one_way: @sim.Time::from_ms(50L),
+    loss: 0.01,
+    receive_window: 2_000_000,
+    // The queue has to be able to hold the bandwidth-delay product, otherwise
+    // the sender can never fill the path and the experiment measures the queue
+    // rather than the algorithm.
+    queue_packets: 2000,
+    payload_bytes: 20_000_000,
+  }
+  println("A. " + small_buffer.label)
+  println("   payload " + small_buffer.payload_bytes.to_string() + " bytes")
   println("")
-  let scenarios : Array[(String, &@tcp.CongestionControl)] = [
+  let collapse = compare(small_buffer, seed, [
     ("none", @tcp.without_congestion_control()),
     ("reno", @tcp.reno(1000)),
-  ]
+  ])
+  print_rows(collapse, small_buffer.payload_bytes)
+  println("")
+  println("   Uncontrolled, the sender pushes the whole 64 KB window into a")
+  println(
+    "   16-packet queue. It overflows, every retransmission is another full",
+  )
+  println(
+    "   burst that overflows it again, and the connection spends its life",
+  )
+  println("   waiting out timeouts that back off to a minute each.")
+  println("")
+  println("   Reno starts with ten segments and grows from there, so the queue")
+  println("   never sees a burst it cannot hold.")
+  println("")
+  println(
+    "   Same path, same seed, same loss: " +
+    (collapse[0].1.elapsed.ps / collapse[1].1.elapsed.ps).to_string() +
+    " times the transfer time.",
+  )
+  println("")
+  println("B. " + long_fat.label)
+  println("   payload " + long_fat.payload_bytes.to_string() + " bytes")
+  println("")
+  let long_path = compare(long_fat, seed, [
+    ("reno", @tcp.reno(1000)),
+    ("cubic", @tcp.cubic(1000)),
+  ])
+  print_rows(long_path, long_fat.payload_bytes)
+  println("")
+  println(
+    "   The bandwidth-delay product is 1.25 MB, so every loss costs a lot",
+  )
+  println(
+    "   of window. Reno halves on every loss and then grows by one segment",
+  )
+  println("   per round trip, so on a path that keeps losing packets it spends")
+  println(
+    "   most of its time climbing back from a small window — and when a",
+  )
+  println(
+    "   loss is bad enough to time out, it restarts from a single segment.",
+  )
+  println("")
+  println(
+    "   CUBIC keeps 70% of the window and climbs back along a cubic curve:",
+  )
+  println(
+    "   steeply at first, because it has already proved the path can carry",
+  )
+  println("   that traffic, then flattening as it approaches the window it had")
+  println("   before the loss.")
+}
+
+///|
+/// One experimental setup: a path, a loss rate, and how much to send.
+struct Scenario {
+  label : String
+  bandwidth_bps : Int64
+  one_way : @sim.Time
+  loss : Double
+  receive_window : Int
+  queue_packets : Int
+  payload_bytes : Int
+}
+
+///|
+/// Run every algorithm through one scenario and return what each produced.
+fn compare(
+  scenario : Scenario,
+  seed : UInt64,
+  algorithms : Array[(String, &@tcp.CongestionControl)],
+) -> Array[(String, TransferResult)] {
   let results : Array[(String, TransferResult)] = []
-  for scenario in scenarios {
-    let name = scenario.0
-    let cc = scenario.1
-    let result = run_transfer_with_cc(seed, one_way, payload_bytes, cc)
-    results.push((name, result))
+  for algorithm in algorithms {
+    results.push((algorithm.0, run_transfer_in(scenario, seed, algorithm.1)))
+  }
+  results
+}
+
+///|
+/// Print one result per algorithm, aligned.
+fn print_rows(
+  results : Array[(String, TransferResult)],
+  payload_bytes : Int,
+) -> Unit {
+  for entry in results {
+    let result = entry.1
     println(
-      name.pad_end(6, ' ') +
+      "   " +
+      entry.0.pad_end(6, ' ') +
       "  " +
       result.elapsed.render().pad_start(10, ' ') +
       "  " +
-      goodput_kbps(payload_bytes, result.elapsed).pad_start(7, ' ') +
+      goodput_kbps(payload_bytes, result.elapsed).pad_start(8, ' ') +
       " kbit/s  " +
-      result.retransmits.to_string().pad_start(3, ' ') +
+      result.retransmits.to_string().pad_start(4, ' ') +
       " retransmits  " +
       result.timeouts.to_string().pad_start(2, ' ') +
       " timeouts",
     )
   }
-  println("")
-  let slow = results[0].1.elapsed.ps
-  let fast = results[1].1.elapsed.ps
-  println(
-    "Uncontrolled, the sender pushes a 64 KB burst into a 16-packet queue.",
-  )
-  println("The queue overflows, and every retransmission is another full burst")
-  println(
-    "that overflows it again, so the connection spends its life waiting out",
-  )
-  println("timeouts that back off to a minute each.")
-  println("")
-  println(
-    "Reno starts with ten segments and grows from there, so the queue never sees",
-  )
-  println("a burst it cannot hold.")
-  println("")
-  println(
-    "Same path, same seed, same loss: " +
-    (slow / fast).to_string() +
-    " times the transfer time.",
-  )
 }
 
 ///|
@@ -187,30 +264,31 @@ struct TransferResult {
 }
 
 ///|
-/// Run one bulk transfer with a chosen congestion control algorithm.
-fn run_transfer_with_cc(
+/// Run one bulk transfer in a scenario with a chosen congestion control
+/// algorithm.
+fn run_transfer_in(
+  scenario : Scenario,
   seed : UInt64,
-  one_way : @sim.Time,
-  payload_bytes : Int,
   cc : &@tcp.CongestionControl,
 ) -> TransferResult {
   let sim = @sim.Sim::new(seed)
+  let payload_bytes = scenario.payload_bytes
   let up = @net.LinkSpec::new(
     "up",
-    10_000_000L,
-    one_way,
-    @net.QueueSpec::packets(16),
-  ).with_loss(0.01)
+    scenario.bandwidth_bps,
+    scenario.one_way,
+    @net.QueueSpec::packets(scenario.queue_packets),
+  ).with_loss(scenario.loss)
   let down = @net.LinkSpec::new(
     "down",
-    10_000_000L,
-    one_way,
-    @net.QueueSpec::packets(16),
-  ).with_loss(0.01)
+    scenario.bandwidth_bps,
+    scenario.one_way,
+    @net.QueueSpec::packets(scenario.queue_packets),
+  ).with_loss(scenario.loss)
   let pair = @tcp.LinkPair::new_with_cc(
     sim,
-    @tcp.TcpConfig::new(1000, 64_000, 1000U),
-    @tcp.TcpConfig::new(1000, 64_000, 5000U),
+    @tcp.TcpConfig::new(1000, scenario.receive_window, 1000U),
+    @tcp.TcpConfig::new(1000, scenario.receive_window, 5000U),
     up,
     down,
     seed,
@@ -221,12 +299,11 @@ fn run_transfer_with_cc(
   sim.step_until(() => pair.client.state() == @tcp.Established) |> ignore
   let connected_at = sim.now()
   pair.client.send(sim, Bytes::make(payload_bytes, b'x'))
-  sim.step_until(() => pair.server.delivered().length() == payload_bytes)
-  |> ignore
+  sim.step_until(() => pair.server.delivered_bytes() == payload_bytes) |> ignore
   let delivered_at = sim.now()
   sim.run()
   {
-    delivered: pair.server.delivered().length(),
+    delivered: pair.server.delivered_bytes(),
     connect_elapsed: connected_at - start,
     elapsed: delivered_at - start,
     retransmits: pair.client.retransmits(),
@@ -265,12 +342,11 @@ fn run_transfer(
   sim.step_until(() => pair.client.state() == @tcp.Established) |> ignore
   let connected_at = sim.now()
   pair.client.send(sim, Bytes::make(payload_bytes, b'x'))
-  sim.step_until(() => pair.server.delivered().length() == payload_bytes)
-  |> ignore
+  sim.step_until(() => pair.server.delivered_bytes() == payload_bytes) |> ignore
   let delivered_at = sim.now()
   sim.run()
   {
-    delivered: pair.server.delivered().length(),
+    delivered: pair.server.delivered_bytes(),
     connect_elapsed: connected_at - start,
     elapsed: delivered_at - start,
     retransmits: pair.client.retransmits(),

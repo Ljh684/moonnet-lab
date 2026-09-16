@@ -155,6 +155,17 @@ pub fn Sim::start_journal(self : Sim) -> Unit {
 }
 
 ///|
+/// Whether the journal is on.
+///
+/// Callers that would have to build a string to describe an event should ask
+/// first. Building it unconditionally makes every run pay for a trace nobody
+/// asked for, and on a transfer with tens of thousands of segments that cost
+/// dominates everything else.
+pub fn Sim::is_recording(self : Sim) -> Bool {
+  self.recording
+}
+
+///|
 /// Append a line to the journal, if journalling is on.
 pub fn Sim::note(self : Sim, message : String) -> Unit {
   if self.recording {

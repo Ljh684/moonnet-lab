@@ -149,7 +149,9 @@ pub fn[T] Link::pump(self : Link[T], sim : @sim.Sim) -> Unit {
       let id = packet.id
       if self.draw_loss(sim) {
         self.lost = self.lost + 1
-        sim.note(link_name + " loses #" + id.to_string())
+        if sim.is_recording() {
+          sim.note(link_name + " loses #" + id.to_string())
+        }
       } else {
         sim.at(arrival, link_name + " delivers #" + id.to_string(), () => {
           (self.deliver)(packet)

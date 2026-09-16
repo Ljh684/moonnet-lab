@@ -8,6 +8,8 @@ import {
 }
 
 // Values
+pub fn cubic(Int) -> &CongestionControl
+
 pub fn header_bytes() -> Int
 
 pub fn initial_window(Int) -> Int
@@ -20,6 +22,24 @@ pub fn without_congestion_control() -> &CongestionControl
 
 // Types and methods
 type Buffered
+
+pub(all) struct Cubic {
+  mss : Int
+  mut cwnd : Int
+  mut ssthresh : Int
+  mut w_max : Int
+  mut cwnd_prior : Int
+  mut epoch_start : Int64
+  mut origin : Int
+  mut k_ps : Int64
+  mut w_est : Double
+  mut counter : Int
+  mut rtt_ps : Int64
+  mut in_recovery : Bool
+  mut fast_convergence : Bool
+}
+pub fn Cubic::new(Int) -> Self
+pub fn Cubic::with_fast_convergence(Self, Bool) -> Self
 
 pub(all) struct Flags {
   syn : Bool
@@ -105,10 +125,15 @@ pub(all) struct TcpConnection {
   mut rcv_nxt : Seq
   mut peer_window : Int
   mut send_queue : Bytes
+  mut send_offset : Int
   mut fin_seq : Seq?
   mut peer_fin : Bool
-  inflight : Array[InFlight]
+  mut inflight : Array[InFlight]
+  mut inflight_head : Int
   reorder : Array[Buffered]
+  mut reorder_bytes : Int
+  mut capture : Bool
+  mut delivered_bytes : Int
   mut delivered : Bytes
   mut segments_sent : Int
   mut segments_received : Int
@@ -132,12 +157,14 @@ pub(all) struct TcpConnection {
 }
 pub fn TcpConnection::bytes_acked(Self) -> Int
 pub fn TcpConnection::bytes_sent(Self) -> Int
+pub fn TcpConnection::capture_delivered(Self, Bool) -> Unit
 pub fn TcpConnection::cc_name(Self) -> String
 pub fn TcpConnection::cc_phase(Self) -> String
 pub fn TcpConnection::close(Self, @sim.Sim) -> Unit
 pub fn TcpConnection::connect(Self, @sim.Sim) -> Unit
 pub fn TcpConnection::cwnd(Self) -> Int
 pub fn TcpConnection::delivered(Self) -> Bytes
+pub fn TcpConnection::delivered_bytes(Self) -> Int
 pub fn TcpConnection::duplicate_acks(Self) -> Int
 pub fn TcpConnection::fast_retransmits(Self) -> Int
 pub fn TcpConnection::in_recovery(Self) -> Bool
@@ -187,7 +214,7 @@ pub(open) trait CongestionControl {
   fn ssthresh(Self) -> Int
   fn name(Self) -> String
   fn phase(Self) -> String
-  fn on_ack(Self, Int, Int, Int64) -> Unit
+  fn on_ack(Self, Int, Int, Int64, Int64) -> Unit
   fn on_fast_retransmit(Self, Int, Int) -> Unit
   fn on_duplicate_ack(Self, Int) -> Unit
   fn on_recovery_exit(Self, Int) -> Unit
