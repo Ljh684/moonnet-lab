@@ -102,6 +102,129 @@ fn make_pair(
 }
 
 ///|
+test "the initial window follows RFC 6928" {
+  // Ten segments, never fewer than two, and never fewer than 14 600 bytes.
+  inspect(@tcp.initial_window(1000), content="10000")
+  inspect(@tcp.initial_window(536), content="5360")
+  inspect(@tcp.initial_window(1460), content="14600")
+  inspect(@tcp.initial_window(2000), content="14600")
+  // Ten tiny segments is still under the 14 600 byte floor, so ten wins.
+  inspect(@tcp.initial_window(100), content="1000")
+}
+
+///|
+test "the congestion window limits the first burst, not the receive window" {
+  let sim = @sim.Sim::new(1UL)
+  let client = @tcp.TcpConnection::new(@tcp.TcpConfig::new(1000, 64_000, 1000U))
+  let server = @tcp.TcpConnection::new(@tcp.TcpConfig::new(1000, 64_000, 5000U))
+  wire_loopback(sim, client, server, @sim.Time::from_ms(25L), DropNone)
+  server.listen()
+  client.connect(sim)
+  sim.run()
+  // The receiver offered 64 000 bytes. Reno's initial window is ten segments,
+  // so ten segments is what leaves the sender.
+  inspect(client.peer_window(), content="64000")
+  inspect(client.cwnd(), content="10000")
+  client.send(sim, pattern_bytes(64_000))
+  inspect(client.bytes_sent(), content="10000")
+  inspect(client.inflight(), content="10")
+  sim.run()
+  inspect(server.delivered().length(), content="64000")
+}
+
+///|
+test "no congestion control leaves the receive window as the only limit" {
+  let sim = @sim.Sim::new(1UL)
+  let client = @tcp.TcpConnection::new_with_cc(
+    @tcp.TcpConfig::new(1000, 64_000, 1000U),
+    @tcp.without_congestion_control(),
+  )
+  let server = @tcp.TcpConnection::new(@tcp.TcpConfig::new(1000, 64_000, 5000U))
+  wire_loopback(sim, client, server, @sim.Time::from_ms(25L), DropNone)
+  server.listen()
+  client.connect(sim)
+  sim.run()
+  client.send(sim, pattern_bytes(64_000))
+  // Every byte the receiver offered goes out in one burst.
+  inspect(client.bytes_sent(), content="64000")
+  sim.run()
+  inspect(server.delivered().length(), content="64000")
+  inspect(client.cc_name(), content="none")
+}
+
+///|
+test "slow start doubles the window once per round trip" {
+  let sim = @sim.Sim::new(1UL)
+  let client = @tcp.TcpConnection::new(
+    @tcp.TcpConfig::new(1000, 1_000_000, 1000U),
+  )
+  let server = @tcp.TcpConnection::new(
+    @tcp.TcpConfig::new(1000, 1_000_000, 5000U),
+  )
+  wire_loopback(sim, client, server, @sim.Time::from_ms(25L), DropNone)
+  server.listen()
+  client.connect(sim)
+  sim.run()
+  inspect(client.cc_phase(), content="slow start")
+  client.send(sim, pattern_bytes(500_000))
+  // One round trip after the first burst, the window has doubled: each of the
+  // ten segments acknowledged adds one segment.
+  sim.step_until(() => client.cwnd() >= 20_000) |> ignore
+  inspect(client.cwnd(), content="20000")
+  sim.step_until(() => client.cwnd() >= 40_000) |> ignore
+  inspect(client.cwnd(), content="40000")
+}
+
+///|
+test "a timeout collapses the window to one segment and halves the threshold" {
+  let sim = @sim.Sim::new(1UL)
+  // The RFC 6298 floor keeps the handshake's own timer out of the picture: with
+  // a timeout as short as the round trip, the SYN timer fires spuriously.
+  let client = @tcp.TcpConnection::new(@tcp.TcpConfig::new(1000, 64_000, 1000U))
+  let server = @tcp.TcpConnection::new(@tcp.TcpConfig::new(1000, 64_000, 5000U))
+  // Every data segment is lost, so the connection cannot make progress and
+  // every repair is a timeout.
+  wire_loopback(sim, client, server, @sim.Time::from_ms(25L), DropAll)
+  server.listen()
+  client.connect(sim)
+  sim.run()
+  client.send(sim, pattern_bytes(10_000))
+  sim.step_until(() => client.timeouts() > 0) |> ignore
+  // Ten segments were in flight; the threshold becomes half of that, and the
+  // window restarts at a single segment.
+  inspect(client.ssthresh(), content="5000")
+  inspect(client.cwnd(), content="1000")
+  inspect(client.cc_phase(), content="slow start")
+}
+
+///|
+test "fast retransmit halves the window and recovery restores it" {
+  let sim = @sim.Sim::new(1UL)
+  let client = @tcp.TcpConnection::new(@tcp.TcpConfig::new(1000, 64_000, 1000U))
+  let server = @tcp.TcpConnection::new(@tcp.TcpConfig::new(1000, 64_000, 5000U))
+  wire_loopback(sim, client, server, @sim.Time::from_ms(25L), DropNth(2))
+  server.listen()
+  client.connect(sim)
+  sim.run()
+  client.send(sim, pattern_bytes(80_000))
+  // Thirty segments leave in the first burst, then the second is dropped and the
+  // twenty-eight behind it raise duplicate acknowledgments.
+  sim.step_until(() => client.in_recovery()) |> ignore
+  // Eleven thousand bytes were in flight when the hole was found: the first
+  // acknowledgment grew the window, which let two more segments leave before the
+  // third duplicate acknowledgment arrived. The threshold is half of that, and
+  // the window is inflated by the three segments that already left the network.
+  inspect(client.ssthresh(), content="5500")
+  inspect(client.cwnd(), content="8500")
+  inspect(client.cc_phase(), content="fast recovery")
+  sim.run()
+  // Recovery deflates the window back to the threshold and slow start resumes.
+  inspect(client.ssthresh(), content="5500")
+  inspect(client.cwnd() > 5500, content="true")
+  inspect(client.in_recovery(), content="false")
+}
+
+///|
 test "three duplicate acknowledgments retransmit without waiting for the timer" {
   let sim = @sim.Sim::new(1UL)
   // The default RFC 6298 timeout is a second. That is the point: the timer is

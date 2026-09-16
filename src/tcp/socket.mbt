@@ -132,6 +132,7 @@ struct Buffered {
 /// inside the protocol.
 pub(all) struct TcpConnection {
   config : TcpConfig
+  cc : &CongestionControl
   mut state : TcpState
   mut emit : (Segment) -> Unit
   mut snd_una : Seq
@@ -177,10 +178,28 @@ pub(all) struct TcpConnection {
 }
 
 ///|
+
+///|
+/// A connection controlled by Reno, which is what a TCP connection normally is.
 pub fn TcpConnection::new(config : TcpConfig) -> TcpConnection {
+  TcpConnection::new_with_cc(
+    config,
+    Reno::new(config.mss) as &CongestionControl,
+  )
+}
+
+///|
+/// A connection with a specific congestion control algorithm, including
+/// `NoCongestionControl` for experiments that want the peer's window to be the
+/// only limit.
+pub fn TcpConnection::new_with_cc(
+  config : TcpConfig,
+  cc : &CongestionControl,
+) -> TcpConnection {
   let iss = Seq::of(config.initial_seq)
   {
     config,
+    cc,
     state: Closed,
     emit: _segment => (),
     snd_una: iss,
@@ -415,18 +434,25 @@ fn TcpConnection::process_ack(
     }
   }
   let mut index = self.inflight.length()
+  let mut acknowledged_bytes = 0
   while index > 0 {
     index = index - 1
     let entry = self.inflight[index]
     if !entry.seq.advance(entry.sequence_length).after(ack) {
       self.bytes_acked = self.bytes_acked + entry.payload.length()
+      acknowledged_bytes = acknowledged_bytes + entry.payload.length()
       self.inflight.remove(index) |> ignore
     }
   }
+  let mut round_trip = 0L
   match sample {
-    Some(round_trip) => self.update_rtt(round_trip)
+    Some(measured) => {
+      round_trip = measured
+      self.update_rtt(measured)
+    }
     None => ()
   }
+  self.cc.on_ack(acknowledged_bytes, self.config.mss, round_trip)
   self.dup_ack_count = 0
   match self.state {
     SynReceived =>
@@ -452,7 +478,9 @@ fn TcpConnection::process_ack(
   if self.in_recovery {
     if !ack.before(self.recover_until) {
       self.in_recovery = false
+      self.cc.on_recovery_exit(self.config.mss)
     } else {
+      self.cc.on_partial_ack(self.config.mss)
       self.retransmit_oldest(sim)
       self.fast_retransmits = self.fast_retransmits + 1
     }
@@ -490,19 +518,27 @@ fn TcpConnection::on_duplicate_ack(
   self : TcpConnection,
   sim : @sim.Sim,
 ) -> Unit {
-  if self.dup_ack_count != 3 {
+  if self.dup_ack_count < 3 || self.inflight.length() == 0 {
     return
   }
-  if self.in_recovery || self.inflight.length() == 0 {
+  if self.in_recovery {
+    // Another segment has left the network, so the algorithm may let one more
+    // in. This is the only signal that distinguishes "the peer is still
+    // receiving" from "the connection is stalled".
+    self.cc.on_duplicate_ack(self.config.mss)
+    self.pump(sim)
     return
   }
+  let flight_size = self.snd_una.distance_to(self.snd_nxt)
   self.in_recovery = true
   self.recover_until = self.snd_nxt
+  self.cc.on_fast_retransmit(flight_size, self.config.mss)
   self.retransmit_oldest(sim)
   self.fast_retransmits = self.fast_retransmits + 1
   // The timer restarts so that a retransmission that is itself lost is still
   // caught, but at the un-backed-off timeout: this is not a timeout yet.
   self.arm_timer(sim)
+  self.pump(sim)
 }
 
 ///|
@@ -580,6 +616,8 @@ fn TcpConnection::on_timeout(
     self.timer_running = false
     return
   }
+  let flight_size = self.snd_una.distance_to(self.snd_nxt)
+  self.cc.on_timeout(flight_size, self.config.mss)
   self.timeouts = self.timeouts + 1
   self.consecutive_timeouts = self.consecutive_timeouts + 1
   // A timeout means the fast retransmit did not repair the hole, so recovery is
@@ -663,7 +701,14 @@ fn TcpConnection::pump(self : TcpConnection, sim : @sim.Sim) -> Unit {
     // Bytes in flight is how far `snd_nxt` has run ahead of `snd_una`, so the
     // distance is measured from the acknowledged end towards the sent end.
     let in_flight = self.snd_una.distance_to(self.snd_nxt)
-    let allowance = self.peer_window - in_flight
+    // Two independent limits: what the receiver is willing to buffer, and what
+    // the path has been shown to carry. Neither one alone is TCP.
+    let sender_window = if self.peer_window < self.cc.window() {
+      self.peer_window
+    } else {
+      self.cc.window()
+    }
+    let allowance = sender_window - in_flight
     if allowance <= 0 {
       break
     }
@@ -936,6 +981,30 @@ pub fn TcpConnection::fast_retransmits(self : TcpConnection) -> Int {
 /// duplicate acknowledgments.
 pub fn TcpConnection::in_recovery(self : TcpConnection) -> Bool {
   self.in_recovery
+}
+
+///|
+/// The congestion window currently in force, in bytes.
+pub fn TcpConnection::cwnd(self : TcpConnection) -> Int {
+  self.cc.window()
+}
+
+///|
+/// The slow start threshold of the congestion control algorithm.
+pub fn TcpConnection::ssthresh(self : TcpConnection) -> Int {
+  self.cc.ssthresh()
+}
+
+///|
+/// The name of the congestion control algorithm.
+pub fn TcpConnection::cc_name(self : TcpConnection) -> String {
+  self.cc.name()
+}
+
+///|
+/// Which phase the congestion control algorithm reports.
+pub fn TcpConnection::cc_phase(self : TcpConnection) -> String {
+  self.cc.phase()
 }
 
 ///|

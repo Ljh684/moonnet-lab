@@ -21,8 +21,8 @@ moonnet-lab 把网络行为建模成纯函数：给定拓扑、流量、参数�
 | `src/tcp` | 连接状态机、三次握手、序号与累计确认、滑动窗口、乱序重组 | 完成 |
 | `src/tcp` | RTO 估计（RFC 6298）、Karn 算法、超时重传与指数退避 | 完成 |
 | `src/tcp` | 快速重传（三次重复 ACK）、一次窗口内多丢包的部分确认恢复 | 完成 |
-| `src/tcp` | 拥塞窗口与快速恢复中的窗口调整 | 下一步 |
-| `src/cc` | Reno / CUBIC / Vegas 拥塞控制 | 计划中 |
+| `src/tcp` | 可插拔拥塞控制接口、Reno（慢启动 / 拥塞避免 / 快速恢复 / 超时崩塌） | 完成 |
+| `src/tcp` | CUBIC、Vegas | 计划中 |
 | `src/aqm` | RED、CoDel 队列管理 | 计划中 |
 | `src/report` | JSON 指标与 SVG 图表 | 计划中 |
 
@@ -35,6 +35,7 @@ moon test                        # 运行全部测试
 moon run cmd/moonnet -- demo     # 跑一个内置场景并打印报告
 moon run cmd/moonnet -- tcp      # 跑一次完整的 TCP 握手与批量传输
 moon run cmd/moonnet -- lossy    # 同一场景，无丢包 vs 1% 丢包对比
+moon run cmd/moonnet -- cc       # 有无拥塞控制的对比
 ```
 
 demo 的输出：
@@ -65,10 +66,10 @@ segments: 24 sent, 23 received
 
 ```text
 clean path: 50000 bytes end to end in 380.734ms (1050.6 kbit/s), connect 50.032ms, 0 retransmissions
-1% loss:    50000 bytes end to end in 1.389s (287.7 kbit/s), connect 1.050s, 2 retransmissions (1 fast, 1 by timeout)
+1% loss:    50000 bytes end to end in 2.738s (146.0 kbit/s), connect 1.050s, 3 retransmissions (1 fast, 2 by timeout)
 
-estimator:  46 round trip samples, RTO 1.000s
-smoothed:   53.533ms round trip time
+estimator:  70 round trip samples, RTO 2.000s
+smoothed:   51.617ms round trip time
 ```
 
 这组数字里藏着这个项目最想讲清楚的一件事：**同样一个丢包，出现在不同阶段，代价差二十倍。**
@@ -77,7 +78,29 @@ smoothed:   53.533ms round trip time
 
 丢包出现在数据传输阶段时，代价只有大约一个往返时间。因为丢失报文后面还有六七个报文陆续到达，接收端每收到一个就重复发一次 ACK；第三次重复 ACK 一到，发送端立刻重传，不等超时。这就是快速重传。
 
-换句话说，救回一个丢包靠的不是"更聪明地等待"，而是"手上有别的证据"。这也是后面做拥塞控制对比时要解释的核心：CUBIC 和 Vegas 的价值不在于更快发现丢包，而在于不要因为一次丢包就把速度砍半。
+换句话说，救回一个丢包靠的不是"更聪明地等待"，而是"手上有别的证据"。
+
+注意这里的 `RTO 2.000s`：超时之后 RTO 会翻倍，而窗口会塌回一个报文。慢下来是刻意的——下一节的对比说明它为什么要这么慢。
+
+## 拥塞控制：为什么必须慢下来
+
+`cc` 子命令把同一个丢包场景跑两遍，唯一区别是发送端**是否对丢包做出反应**：
+
+```text
+path:    10 Mbps, 25 ms one way, 1% loss each way, 64 KB window, 16-packet queue
+payload: 200000 bytes
+
+none     4509.316s      0.3 kbit/s  107 retransmits  81 timeouts
+reno        2.678s    597.2 kbit/s    7 retransmits   1 timeouts
+
+Same path, same seed, same loss: 1683 times the transfer time.
+```
+
+不带拥塞控制时，发送端把接收端允诺的 64 KB 一次性推进去，而链路的队列只能装 16 个报文。队列溢出，丢包；重传又是同样一整批，再次溢出；每次超时还按指数退避翻倍，一路涨到分钟级。200 KB 的数据传了 75 分钟——这就是 1986 年让互联网差点瘫掉的拥塞崩溃，在 200 行代码里复现了一遍。
+
+Reno 一开始只发 10 个报文，之后慢慢加速，队列始终没见到装不下的突发。它在单条连接上牺牲了速度，换来的是不会把网络推进崩溃。
+
+这也是为什么拥塞控制的价值不能只看单条连接的吞吐：真正的问题是多条连接共用一条链路时会发生什么。那个对比需要场景文件和多流支持，是下一步的事。
 
 ## 确定性是怎么保证的
 

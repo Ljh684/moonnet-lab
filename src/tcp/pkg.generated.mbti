@@ -10,6 +10,12 @@ import {
 // Values
 pub fn header_bytes() -> Int
 
+pub fn initial_window(Int) -> Int
+
+pub fn reno(Int) -> &CongestionControl
+
+pub fn without_congestion_control() -> &CongestionControl
+
 // Errors
 
 // Types and methods
@@ -39,7 +45,20 @@ pub(all) struct LinkPair {
 }
 pub fn LinkPair::connect(Self, @sim.Sim) -> Unit
 pub fn LinkPair::new(@sim.Sim, TcpConfig, TcpConfig, @net.LinkSpec, @net.LinkSpec, UInt64) -> Self
+pub fn LinkPair::new_with_cc(@sim.Sim, TcpConfig, TcpConfig, @net.LinkSpec, @net.LinkSpec, UInt64, &CongestionControl) -> Self
 pub fn LinkPair::summary(Self) -> String
+
+pub(all) struct NoCongestionControl {
+  limit : Int
+}
+pub fn NoCongestionControl::new() -> Self
+
+pub(all) struct Reno {
+  mut cwnd : Int
+  mut ssthresh : Int
+  mut in_recovery : Bool
+}
+pub fn Reno::new(Int) -> Self
 
 pub(all) struct Segment {
   seq : Seq
@@ -78,6 +97,7 @@ pub fn TcpConfig::with_rto(Self, @sim.Time, @sim.Time, @sim.Time) -> Self
 
 pub(all) struct TcpConnection {
   config : TcpConfig
+  cc : &CongestionControl
   mut state : TcpState
   mut emit : (Segment) -> Unit
   mut snd_una : Seq
@@ -112,8 +132,11 @@ pub(all) struct TcpConnection {
 }
 pub fn TcpConnection::bytes_acked(Self) -> Int
 pub fn TcpConnection::bytes_sent(Self) -> Int
+pub fn TcpConnection::cc_name(Self) -> String
+pub fn TcpConnection::cc_phase(Self) -> String
 pub fn TcpConnection::close(Self, @sim.Sim) -> Unit
 pub fn TcpConnection::connect(Self, @sim.Sim) -> Unit
+pub fn TcpConnection::cwnd(Self) -> Int
 pub fn TcpConnection::delivered(Self) -> Bytes
 pub fn TcpConnection::duplicate_acks(Self) -> Int
 pub fn TcpConnection::fast_retransmits(Self) -> Int
@@ -121,6 +144,7 @@ pub fn TcpConnection::in_recovery(Self) -> Bool
 pub fn TcpConnection::inflight(Self) -> Int
 pub fn TcpConnection::listen(Self) -> Unit
 pub fn TcpConnection::new(TcpConfig) -> Self
+pub fn TcpConnection::new_with_cc(TcpConfig, &CongestionControl) -> Self
 pub fn TcpConnection::on_segment(Self, @sim.Sim, Segment) -> Unit
 pub fn TcpConnection::peer_window(Self) -> Int
 pub fn TcpConnection::rcv_nxt(Self) -> Seq
@@ -134,6 +158,7 @@ pub fn TcpConnection::set_emit(Self, (Segment) -> Unit) -> Unit
 pub fn TcpConnection::snd_nxt(Self) -> Seq
 pub fn TcpConnection::snd_una(Self) -> Seq
 pub fn TcpConnection::srtt(Self) -> @sim.Time?
+pub fn TcpConnection::ssthresh(Self) -> Int
 pub fn TcpConnection::state(Self) -> TcpState
 pub fn TcpConnection::timeouts(Self) -> Int
 pub fn TcpConnection::timer_running(Self) -> Bool
@@ -157,3 +182,15 @@ pub impl Show for TcpState
 // Type aliases
 
 // Traits
+pub(open) trait CongestionControl {
+  fn window(Self) -> Int
+  fn ssthresh(Self) -> Int
+  fn name(Self) -> String
+  fn phase(Self) -> String
+  fn on_ack(Self, Int, Int, Int64) -> Unit
+  fn on_fast_retransmit(Self, Int, Int) -> Unit
+  fn on_duplicate_ack(Self, Int) -> Unit
+  fn on_recovery_exit(Self, Int) -> Unit
+  fn on_partial_ack(Self, Int) -> Unit
+  fn on_timeout(Self, Int, Int) -> Unit
+}

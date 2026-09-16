@@ -25,6 +25,40 @@ pub fn LinkPair::new(
 ) -> LinkPair {
   let client = TcpConnection::new(client_config)
   let server = TcpConnection::new(server_config)
+  LinkPair::build(sim, client, server, client_to_server, server_to_client, seed)
+}
+
+///|
+/// The same wiring, with a chosen congestion control algorithm on the client.
+///
+/// Only the client is given one because only the client sends bulk data here;
+/// the server's algorithm would never be consulted. Handing the same object to
+/// both ends would be a mistake anyway: the window and threshold are per
+/// connection, so sharing one would let the two ends corrupt each other's state.
+pub fn LinkPair::new_with_cc(
+  sim : @sim.Sim,
+  client_config : TcpConfig,
+  server_config : TcpConfig,
+  client_to_server : @net.LinkSpec,
+  server_to_client : @net.LinkSpec,
+  seed : UInt64,
+  cc : &CongestionControl,
+) -> LinkPair {
+  let client = TcpConnection::new_with_cc(client_config, cc)
+  let server = TcpConnection::new(server_config)
+  LinkPair::build(sim, client, server, client_to_server, server_to_client, seed)
+}
+
+///|
+/// Wire two existing connections through a pair of links.
+fn LinkPair::build(
+  sim : @sim.Sim,
+  client : TcpConnection,
+  server : TcpConnection,
+  client_to_server : @net.LinkSpec,
+  server_to_client : @net.LinkSpec,
+  seed : UInt64,
+) -> LinkPair {
   let up = @net.Link::new(client_to_server, seed, packet => {
     server.on_segment(sim, packet.payload)
   })
