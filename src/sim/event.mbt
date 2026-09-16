@@ -271,3 +271,30 @@ pub fn Sim::run(self : Sim, max_events? : Int = 1_000_000) -> Unit {
     count = count + 1
   }
 }
+
+///|
+/// Run until `condition` holds, and report whether it ever did.
+///
+/// Draining the queue tells you the simulation is over; this tells you when the
+/// thing you were measuring actually happened. The distinction matters because a
+/// protocol leaves superseded timer events behind: they are ignored when they
+/// fire, but they are still events, and draining them pushes the clock past the
+/// moment of interest. Measuring a transfer by reading the clock after a full
+/// drain would report the last stale timer instead of the last byte.
+pub fn Sim::step_until(
+  self : Sim,
+  condition : () -> Bool,
+  max_events? : Int = 1_000_000,
+) -> Bool {
+  let mut count = 0
+  while count < max_events {
+    if condition() {
+      return true
+    }
+    if !self.step() {
+      return condition()
+    }
+    count = count + 1
+  }
+  false
+}

@@ -20,7 +20,8 @@ moonnet-lab 把网络行为建模成纯函数：给定拓扑、流量、参数�
 | `src/net` | 数据包、有界队列（drop-tail）、链路（带宽/延迟/抖动/丢包） | 完成 |
 | `src/tcp` | 连接状态机、三次握手、序号与累计确认、滑动窗口、乱序重组 | 完成 |
 | `src/tcp` | RTO 估计（RFC 6298）、Karn 算法、超时重传与指数退避 | 完成 |
-| `src/tcp` | 快速重传与快速恢复 | 下一步 |
+| `src/tcp` | 快速重传（三次重复 ACK）、一次窗口内多丢包的部分确认恢复 | 完成 |
+| `src/tcp` | 拥塞窗口与快速恢复中的窗口调整 | 下一步 |
 | `src/cc` | Reno / CUBIC / Vegas 拥塞控制 | 计划中 |
 | `src/aqm` | RED、CoDel 队列管理 | 计划中 |
 | `src/report` | JSON 指标与 SVG 图表 | 计划中 |
@@ -51,26 +52,32 @@ link:     uplink: 3 packets, 4500 bytes, 0 dropped, utilization 42.8%
 `tcp` 子命令走完整的协议路径——三次握手、20000 字节应用数据、逐段确认：
 
 ```text
-handshake completed at 15.048ms
-transferred 20000 bytes in 34.636ms (4619.3 kbit/s)
+handshake completed at 10.032ms
+transferred 20000 bytes in 29.636ms (5398.6 kbit/s)
 client: ESTABLISHED
 server: ESTABLISHED
 segments: 24 sent, 23 received
 ```
 
-34.6 毫秒这个数字可以直接验算：接收窗口 8192 字节、MSS 1000 字节，最多 8 个段同时在途，20 个段需要大约三次往返，而一次往返是 10 毫秒加上链路的串行化时间。同样地，它也是一条回归测试。
+29.6 毫秒这个数字可以直接验算：接收窗口 8192 字节、MSS 1000 字节，最多 8 个段同时在途，20 个段需要大约三次往返，而一次往返是 10 毫秒加上链路的串行化时间。同样地，它也是一条回归测试。
 
 `lossy` 子命令把同一个场景跑两遍——一遍干净，一遍每条链路丢 1% 的包：
 
 ```text
-clean path: 50000 bytes in 1.310s (305.1 kbit/s), 0 retransmissions
-1% loss:    50000 bytes in 3.304s (121.0 kbit/s), 2 retransmissions, 2 timeouts
+clean path: 50000 bytes end to end in 380.734ms (1050.6 kbit/s), connect 50.032ms, 0 retransmissions
+1% loss:    50000 bytes end to end in 1.389s (287.7 kbit/s), connect 1.050s, 2 retransmissions (1 fast, 1 by timeout)
 
 estimator:  46 round trip samples, RTO 1.000s
 smoothed:   53.533ms round trip time
 ```
 
-一成的数据改变，2.5 倍的传输时间。原因写在最后两行里：往返时间测出来是 53 毫秒，但 RTO 停在 1 秒——RFC 6298 规定连接在建立初期必须按最坏情况估计超时，所以每个丢失的包要等满一秒才被重传。这个"损失一个包就等于损失一秒"的现象，是后面做拥塞控制对比时最先要解释的东西：CUBIC 和 Vegas 的价值不在于更快发现丢包，而在于不要因为一次丢包就把速度砍半。
+这组数字里藏着这个项目最想讲清楚的一件事：**同样一个丢包，出现在不同阶段，代价差二十倍。**
+
+丢包出现在握手阶段时，连接要多花整整一秒。TCP 建立初期必须按最坏情况估计超时（RFC 6298 规定初始 RTO 为 1 秒），而握手报文的后面没有任何报文在飞，收不到重复 ACK，只能等定时器。
+
+丢包出现在数据传输阶段时，代价只有大约一个往返时间。因为丢失报文后面还有六七个报文陆续到达，接收端每收到一个就重复发一次 ACK；第三次重复 ACK 一到，发送端立刻重传，不等超时。这就是快速重传。
+
+换句话说，救回一个丢包靠的不是"更聪明地等待"，而是"手上有别的证据"。这也是后面做拥塞控制对比时要解释的核心：CUBIC 和 Vegas 的价值不在于更快发现丢包，而在于不要因为一次丢包就把速度砍半。
 
 ## 确定性是怎么保证的
 

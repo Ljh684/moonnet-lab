@@ -150,8 +150,18 @@ pub(all) struct TcpConnection {
   mut bytes_acked : Int
   mut duplicate_acks : Int
   mut retransmits : Int
+  mut fast_retransmits : Int
   mut timeouts : Int
   mut consecutive_timeouts : Int
+  /// Duplicate acknowledgments seen since the last acknowledgment that made
+  /// progress. Three of them are the signal that a segment is missing while the
+  /// segments behind it are arriving.
+  mut dup_ack_count : Int
+  /// True between a fast retransmit and the acknowledgment that closes the gap.
+  mut in_recovery : Bool
+  /// The highest sequence number that had been sent when recovery began. An
+  /// acknowledgment that reaches this point means every hole is filled.
+  mut recover_until : Seq
   mut rtt_samples : Int
   mut srtt_ps : Double
   mut rttvar_ps : Double
@@ -189,8 +199,12 @@ pub fn TcpConnection::new(config : TcpConfig) -> TcpConnection {
     bytes_acked: 0,
     duplicate_acks: 0,
     retransmits: 0,
+    fast_retransmits: 0,
     timeouts: 0,
     consecutive_timeouts: 0,
+    dup_ack_count: 0,
+    in_recovery: false,
+    recover_until: iss,
     rtt_samples: 0,
     srtt_ps: 0.0,
     rttvar_ps: 0.0,
@@ -385,6 +399,8 @@ fn TcpConnection::process_ack(
   }
   if ack == self.snd_una {
     self.duplicate_acks = self.duplicate_acks + 1
+    self.dup_ack_count = self.dup_ack_count + 1
+    self.on_duplicate_ack(sim)
     return
   }
   let old_una = self.snd_una
@@ -411,6 +427,7 @@ fn TcpConnection::process_ack(
     Some(round_trip) => self.update_rtt(round_trip)
     None => ()
   }
+  self.dup_ack_count = 0
   match self.state {
     SynReceived =>
       if self.fin_acked() || self.syn_acked() {
@@ -429,6 +446,17 @@ fn TcpConnection::process_ack(
     LastAck => if self.fin_acked() { self.state = Closed }
     _ => ()
   }
+  // Recovery ends when an acknowledgment reaches everything that was in flight
+  // when it started. An acknowledgment that stops short means the retransmission
+  // filled one hole and there is another one behind it.
+  if self.in_recovery {
+    if !ack.before(self.recover_until) {
+      self.in_recovery = false
+    } else {
+      self.retransmit_oldest(sim)
+      self.fast_retransmits = self.fast_retransmits + 1
+    }
+  }
   // Acknowledged progress clears the retransmission streak, and the timer now
   // either covers what is left in flight or stops entirely.
   self.consecutive_timeouts = 0
@@ -444,6 +472,37 @@ fn TcpConnection::process_ack(
 /// True once the acknowledgment has passed the SYN we sent.
 fn TcpConnection::syn_acked(self : TcpConnection) -> Bool {
   self.snd_una.after(Seq::of(self.config.initial_seq))
+}
+
+///|
+/// React to an acknowledgment that repeats what the peer already said.
+///
+/// One or two repeats are ordinary reordering. Three means a segment is missing
+/// and at least three segments behind it have arrived, which is exactly the
+/// information the sender needs to repair the hole now instead of waiting out a
+/// retransmission timer that may be three orders of magnitude too long.
+///
+/// The window adjustments that RFC 5681 pairs with this — halving the
+/// congestion window and inflating it by the duplicate acknowledgments — belong
+/// to congestion control and land with it. What happens here is the
+/// retransmission itself, which is useful on its own.
+fn TcpConnection::on_duplicate_ack(
+  self : TcpConnection,
+  sim : @sim.Sim,
+) -> Unit {
+  if self.dup_ack_count != 3 {
+    return
+  }
+  if self.in_recovery || self.inflight.length() == 0 {
+    return
+  }
+  self.in_recovery = true
+  self.recover_until = self.snd_nxt
+  self.retransmit_oldest(sim)
+  self.fast_retransmits = self.fast_retransmits + 1
+  // The timer restarts so that a retransmission that is itself lost is still
+  // caught, but at the un-backed-off timeout: this is not a timeout yet.
+  self.arm_timer(sim)
 }
 
 ///|
@@ -523,6 +582,10 @@ fn TcpConnection::on_timeout(
   }
   self.timeouts = self.timeouts + 1
   self.consecutive_timeouts = self.consecutive_timeouts + 1
+  // A timeout means the fast retransmit did not repair the hole, so recovery is
+  // over and normal timer-driven retransmission takes over.
+  self.in_recovery = false
+  self.dup_ack_count = 0
   if self.consecutive_timeouts > self.config.max_retransmits {
     sim.note(
       "giving up after " + self.consecutive_timeouts.to_string() + " timeouts",
@@ -859,6 +922,20 @@ pub fn TcpConnection::inflight(self : TcpConnection) -> Int {
 /// Segments sent again because the timer expired.
 pub fn TcpConnection::retransmits(self : TcpConnection) -> Int {
   self.retransmits
+}
+
+///|
+/// Segments sent again because duplicate acknowledgments revealed a hole,
+/// without waiting for the timer.
+pub fn TcpConnection::fast_retransmits(self : TcpConnection) -> Int {
+  self.fast_retransmits
+}
+
+///|
+/// Whether the connection is currently repairing a hole discovered by
+/// duplicate acknowledgments.
+pub fn TcpConnection::in_recovery(self : TcpConnection) -> Bool {
+  self.in_recovery
 }
 
 ///|

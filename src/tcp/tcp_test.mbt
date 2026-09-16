@@ -18,6 +18,7 @@ fn pattern_bytes(count : Int) -> Bytes {
 enum DropSpec {
   DropNone
   DropNth(Int)
+  DropRange(Int, Int)
   DropAll
 }
 
@@ -38,13 +39,16 @@ fn wire_loopback(
 ) -> Unit {
   let mut data_count = 0
   client.set_emit(segment => {
-    if segment.payload.length() > 0 {
+    let is_data = segment.payload.length() > 0
+    if is_data {
       data_count = data_count + 1
     }
     let drop_this = match drop {
       DropNone => false
-      DropNth(index) => segment.payload.length() > 0 && data_count == index
-      DropAll => segment.payload.length() > 0
+      DropNth(index) => is_data && data_count == index
+      DropRange(first, last) =>
+        is_data && data_count >= first && data_count <= last
+      DropAll => is_data
     }
     if !drop_this {
       sim.after(one_way, "c->s", () => server.on_segment(sim, segment))
@@ -95,6 +99,87 @@ fn make_pair(
     @net.QueueSpec::packets(64),
   )
   @tcp.LinkPair::new(sim, client_config, server_config, up, down, seed)
+}
+
+///|
+test "three duplicate acknowledgments retransmit without waiting for the timer" {
+  let sim = @sim.Sim::new(1UL)
+  // The default RFC 6298 timeout is a second. That is the point: the timer is
+  // three orders of magnitude too slow to help here, which is why the duplicate
+  // acknowledgments have to.
+  let client = @tcp.TcpConnection::new(@tcp.TcpConfig::new(1000, 8192, 1000U))
+  let server = @tcp.TcpConnection::new(@tcp.TcpConfig::new(1000, 8192, 5000U))
+  // Eight segments go out at once, the second never arrives, and the six behind
+  // it each send a duplicate acknowledgment.
+  wire_loopback(sim, client, server, @sim.Time::from_ms(25L), DropNth(2))
+  server.listen()
+  client.connect(sim)
+  sim.run()
+  let payload = pattern_bytes(8000)
+  client.send(sim, payload)
+  let sent_at = sim.now()
+  // Measure until the last byte reaches the receiver. Draining the queue would
+  // advance the clock to whatever stale timer the recovery left behind.
+  inspect(
+    sim.step_until(() => server.delivered().length() == 8000),
+    content="true",
+  )
+  // The repair costs about two round trips: 100 ms of a 50 ms path, against a
+  // timeout that would have cost a full second.
+  inspect((sim.now() - sent_at).ps < 200_000_000_000L, content="true")
+  sim.run()
+  inspect(client.fast_retransmits(), content="1")
+  inspect(client.timeouts(), content="0")
+  inspect(client.retransmits(), content="1")
+  inspect(client.in_recovery(), content="false")
+  inspect(server.delivered() == payload, content="true")
+  inspect(client.rto().ps >= 1_000_000_000_000L, content="true")
+}
+
+///|
+test "a burst of losses is repaired by partial acknowledgments" {
+  let sim = @sim.Sim::new(1UL)
+  let client = @tcp.TcpConnection::new(@tcp.TcpConfig::new(1000, 8192, 1000U))
+  let server = @tcp.TcpConnection::new(@tcp.TcpConfig::new(1000, 8192, 5000U))
+  // Two segments in a row go missing inside one window, which no single fast
+  // retransmit can repair on its own.
+  wire_loopback(sim, client, server, @sim.Time::from_ms(25L), DropRange(2, 3))
+  server.listen()
+  client.connect(sim)
+  sim.run()
+  let payload = pattern_bytes(8000)
+  client.send(sim, payload)
+  sim.run()
+  // The first hole is found by duplicate acknowledgments, the acknowledgment of
+  // its repair stops short of the end of what was in flight, and that partial
+  // acknowledgment sends the second missing segment.
+  inspect(client.fast_retransmits(), content="2")
+  inspect(client.timeouts(), content="0")
+  inspect(client.in_recovery(), content="false")
+  inspect(server.delivered() == payload, content="true")
+  inspect(client.bytes_acked(), content="8000")
+}
+
+///|
+test "two duplicate acknowledgments are not enough to retransmit" {
+  let sim = @sim.Sim::new(1UL)
+  let client = @tcp.TcpConnection::new(
+    fast_rto_config(1000, 8192, 1000U, @sim.Time::from_ms(50L)),
+  )
+  let server = @tcp.TcpConnection::new(
+    fast_rto_config(1000, 8192, 5000U, @sim.Time::from_ms(50L)),
+  )
+  // With only four segments in the window, one loss produces two duplicate
+  // acknowledgments: not enough evidence, so the timer has to do the work.
+  wire_loopback(sim, client, server, @sim.Time::from_ms(5L), DropNth(2))
+  server.listen()
+  client.connect(sim)
+  sim.run()
+  client.send(sim, pattern_bytes(4000))
+  sim.run()
+  inspect(client.fast_retransmits(), content="0")
+  inspect(client.timeouts(), content="1")
+  inspect(client.retransmits(), content="1")
 }
 
 ///|

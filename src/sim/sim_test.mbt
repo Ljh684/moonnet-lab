@@ -159,6 +159,22 @@ test "run_until stops before later events" {
 }
 
 ///|
+test "step_until stops at the moment of interest" {
+  let sim = @sim.Sim::new(1UL)
+  let mut delivered = 0
+  // A stale event four seconds out, of the kind a cancelled retransmission timer
+  // leaves behind.
+  sim.after(@sim.Time::from_s(4L), "stale timer", () => ())
+  sim.after(@sim.Time::from_ms(10L), "delivery", () => delivered = 1)
+  let reached = sim.step_until(() => delivered == 1)
+  inspect(reached, content="true")
+  // Draining the rest of the queue would move the clock to four seconds.
+  inspect(sim.now().render(), content="10.000ms")
+  sim.run()
+  inspect(sim.now().render(), content="4.000s")
+}
+
+///|
 test "the kernel is reproducible across runs" {
   let first = @sim.Sim::new(2026UL)
   let second = @sim.Sim::new(2026UL)

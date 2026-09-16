@@ -69,12 +69,13 @@ fn tcp_demo() -> Unit {
     1UL,
   )
   pair.connect(sim)
-  sim.run()
+  sim.step_until(() => pair.client.state() == @tcp.Established) |> ignore
   let handshake_done = sim.now()
   let payload = Bytes::make(20_000, b'x')
   pair.client.send(sim, payload)
-  sim.run()
+  sim.step_until(() => pair.server.delivered().length() == 20_000) |> ignore
   let transfer = sim.now() - handshake_done
+  sim.run()
   println(version_line())
   println("")
   println("handshake completed at " + handshake_done.render())
@@ -102,8 +103,10 @@ fn tcp_demo() -> Unit {
 /// What one run of the bulk transfer produced.
 struct TransferResult {
   delivered : Int
+  connect_elapsed : @sim.Time
   elapsed : @sim.Time
   retransmits : Int
+  fast_retransmits : Int
   timeouts : Int
   rto : @sim.Time
   srtt : @sim.Time?
@@ -130,14 +133,23 @@ fn run_transfer(
     seed,
   )
   pair.connect(sim)
-  sim.run()
   let start = sim.now()
+  // Stop as soon as the handshake is done, then as soon as the last byte lands.
+  // Draining the queue at each step would run the clock out to whatever
+  // superseded timer the connection left behind.
+  sim.step_until(() => pair.client.state() == @tcp.Established) |> ignore
+  let connected_at = sim.now()
   pair.client.send(sim, Bytes::make(payload_bytes, b'x'))
+  sim.step_until(() => pair.server.delivered().length() == payload_bytes)
+  |> ignore
+  let delivered_at = sim.now()
   sim.run()
   {
     delivered: pair.server.delivered().length(),
-    elapsed: sim.now() - start,
+    connect_elapsed: connected_at - start,
+    elapsed: delivered_at - start,
     retransmits: pair.client.retransmits(),
+    fast_retransmits: pair.client.fast_retransmits(),
     timeouts: pair.client.timeouts(),
     rto: pair.client.rto(),
     srtt: pair.client.srtt(),
@@ -191,27 +203,42 @@ fn lossy_demo() -> Unit {
   println(
     "clean path: " +
     clean.delivered.to_string() +
-    " bytes in " +
+    " bytes end to end in " +
     clean.elapsed.render() +
     " (" +
     goodput_kbps(payload_bytes, clean.elapsed) +
-    " kbit/s), " +
+    " kbit/s), connect " +
+    clean.connect_elapsed.render() +
+    ", " +
     clean.retransmits.to_string() +
     " retransmissions",
   )
   println(
     "1% loss:    " +
     lossy.delivered.to_string() +
-    " bytes in " +
+    " bytes end to end in " +
     lossy.elapsed.render() +
     " (" +
     goodput_kbps(payload_bytes, lossy.elapsed) +
-    " kbit/s), " +
+    " kbit/s), connect " +
+    lossy.connect_elapsed.render() +
+    ", " +
     lossy.retransmits.to_string() +
-    " retransmissions, " +
-    lossy.timeouts.to_string() +
-    " timeouts",
+    " retransmissions (" +
+    lossy.fast_retransmits.to_string() +
+    " fast, " +
+    (lossy.retransmits - lossy.fast_retransmits).to_string() +
+    " by timeout)",
   )
+  println("")
+  println(
+    "            " +
+    lossy.timeouts.to_string() +
+    " timer" +
+    (if lossy.timeouts == 1 { "" } else { "s" }) +
+    " expired: a handshake packet has no successors, so no duplicate",
+  )
+  println("            acknowledgments can reveal the hole")
   println("")
   println(
     "estimator:  " +

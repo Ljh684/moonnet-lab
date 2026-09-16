@@ -96,8 +96,12 @@ pub(all) struct TcpConnection {
   mut bytes_acked : Int
   mut duplicate_acks : Int
   mut retransmits : Int
+  mut fast_retransmits : Int
   mut timeouts : Int
   mut consecutive_timeouts : Int
+  mut dup_ack_count : Int
+  mut in_recovery : Bool
+  mut recover_until : Seq
   mut rtt_samples : Int
   mut srtt_ps : Double
   mut rttvar_ps : Double
@@ -112,6 +116,8 @@ pub fn TcpConnection::close(Self, @sim.Sim) -> Unit
 pub fn TcpConnection::connect(Self, @sim.Sim) -> Unit
 pub fn TcpConnection::delivered(Self) -> Bytes
 pub fn TcpConnection::duplicate_acks(Self) -> Int
+pub fn TcpConnection::fast_retransmits(Self) -> Int
+pub fn TcpConnection::in_recovery(Self) -> Bool
 pub fn TcpConnection::inflight(Self) -> Int
 pub fn TcpConnection::listen(Self) -> Unit
 pub fn TcpConnection::new(TcpConfig) -> Self

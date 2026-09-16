@@ -60,6 +60,7 @@ pub fn Sim::run_until(Self, Time) -> Unit
 pub fn Sim::schedule_at(Self, Time, String, () -> Unit) -> Unit
 pub fn Sim::start_journal(Self) -> Unit
 pub fn Sim::step(Self) -> Bool
+pub fn Sim::step_until(Self, () -> Bool, max_events? : Int) -> Bool
 
 pub(all) struct SplitMix64 {
   mut state : UInt64
