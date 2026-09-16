@@ -18,7 +18,8 @@ moonnet-lab 把网络行为建模成纯函数：给定拓扑、流量、参数�
 | --- | --- | --- |
 | `src/sim` | 虚拟时间、确定性事件队列、可复现随机源 | 完成 |
 | `src/net` | 数据包、有界队列（drop-tail）、链路（带宽/延迟/抖动） | 完成 |
-| `src/tcp` | TCP 状态机、滑动窗口、重传与超时 | 进行中 |
+| `src/tcp` | 连接状态机、三次握手、序号与累计确认、滑动窗口、乱序重组 | 完成 |
+| `src/tcp` | 超时重传、快速重传 | 下一步 |
 | `src/cc` | Reno / CUBIC / Vegas 拥塞控制 | 计划中 |
 | `src/aqm` | RED、CoDel 队列管理 | 计划中 |
 | `src/report` | JSON 指标与 SVG 图表 | 计划中 |
@@ -30,6 +31,7 @@ moonnet-lab 把网络行为建模成纯函数：给定拓扑、流量、参数�
 ```bash
 moon test                        # 运行全部测试
 moon run cmd/moonnet -- demo     # 跑一个内置场景并打印报告
+moon run cmd/moonnet -- tcp      # 跑一次完整的 TCP 握手与批量传输
 ```
 
 demo 的输出：
@@ -43,6 +45,18 @@ link:     uplink: 3 packets, 4500 bytes, 0 dropped, utilization 42.8%
 ```
 
 三个 1500 字节的数据包相隔 200 微秒发出。10 Mbps 的链路上每个包要占用 1.2 毫秒，所以它们排队而不是重叠，到达时间正好相差一个发送时长。这类数字不是打印出来看看的：它们全部写进了回归测试。
+
+`tcp` 子命令走完整的协议路径——三次握手、20000 字节应用数据、逐段确认：
+
+```text
+handshake completed at 15.048ms
+transferred 20000 bytes in 34.636ms (4619.3 kbit/s)
+client: ESTABLISHED
+server: ESTABLISHED
+segments: 24 sent, 23 received
+```
+
+34.6 毫秒这个数字可以直接验算：接收窗口 8192 字节、MSS 1000 字节，最多 8 个段同时在途，20 个段需要大约三次往返，而一次往返是 10 毫秒加上链路的串行化时间。同样地，它也是一条回归测试。
 
 ## 确定性是怎么保证的
 

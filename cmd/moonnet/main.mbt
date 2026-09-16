@@ -12,6 +12,7 @@ fn main {
   match command {
     "version" => println(version_line())
     "demo" => demo()
+    "tcp" => tcp_demo()
     "help" | "-h" | "--help" => usage()
     _ => {
       println("unknown command: " + command)
@@ -34,8 +35,79 @@ fn usage() -> Unit {
   println("")
   println("commands:")
   println("  demo      run the built-in three-flow demo and print a report")
+  println("  tcp       run a TCP handshake and bulk transfer over two links")
   println("  version   print the version")
   println("  help      print this message")
+}
+
+///|
+/// A bulk transfer over a real connection: three-way handshake, then 20 000
+/// bytes of application data from client to server, with every segment
+/// serialized by the links and acknowledged by the peer.
+fn tcp_demo() -> Unit {
+  let sim = @sim.Sim::new(1UL)
+  let up = @net.LinkSpec::new(
+    "up",
+    10_000_000L,
+    @sim.Time::from_ms(5L),
+    @net.QueueSpec::packets(64),
+  )
+  let down = @net.LinkSpec::new(
+    "down",
+    10_000_000L,
+    @sim.Time::from_ms(5L),
+    @net.QueueSpec::packets(64),
+  )
+  let pair = @tcp.LinkPair::new(
+    sim,
+    @tcp.TcpConfig::new(1000, 8192, 1000U),
+    @tcp.TcpConfig::new(1000, 8192, 5000U),
+    up,
+    down,
+    1UL,
+  )
+  pair.connect(sim)
+  sim.run()
+  let handshake_done = sim.now()
+  let payload = Bytes::make(20_000, b'x')
+  pair.client.send(sim, payload)
+  sim.run()
+  let transfer = sim.now() - handshake_done
+  println(version_line())
+  println("")
+  println("handshake completed at " + handshake_done.render())
+  println(
+    "transferred " +
+    pair.server.delivered().length().to_string() +
+    " bytes in " +
+    transfer.render() +
+    " (" +
+    goodput_kbps(20_000, transfer) +
+    " kbit/s)",
+  )
+  println("client: " + pair.client.state().render())
+  println("server: " + pair.server.state().render())
+  println(
+    "segments: " +
+    pair.client.segments_sent().to_string() +
+    " sent, " +
+    pair.client.segments_received().to_string() +
+    " received",
+  )
+}
+
+///|
+/// Payload throughput, in kilobits per second, ignoring the 60 s TIME-WAIT tail
+/// by construction: the caller passes only the transfer interval.
+fn goodput_kbps(bytes : Int, duration : @sim.Time) -> String {
+  let seconds = duration.ps.to_double() / 1_000_000_000_000.0
+  if seconds <= 0.0 {
+    "0.0"
+  } else {
+    let rate = bytes.to_double() * 8.0 / seconds / 1000.0
+    let tenths = (rate * 10.0).to_int64()
+    (tenths / 10L).to_string() + "." + (tenths % 10L).to_string()
+  }
 }
 
 ///|

@@ -1,0 +1,132 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "Ljh684/moonnet-lab/src/tcp"
+
+import {
+  "Ljh684/moonnet-lab/src/net",
+  "Ljh684/moonnet-lab/src/sim",
+  "moonbitlang/core/debug",
+}
+
+// Values
+pub fn header_bytes() -> Int
+
+// Errors
+
+// Types and methods
+type Buffered
+
+pub(all) struct Flags {
+  syn : Bool
+  ack : Bool
+  fin : Bool
+  rst : Bool
+} derive(Eq, @debug.Debug)
+pub fn Flags::ack() -> Self
+pub fn Flags::data() -> Self
+pub fn Flags::fin_ack() -> Self
+pub fn Flags::render(Self) -> String
+pub fn Flags::sequence_length(Self, Int) -> Int
+pub fn Flags::syn() -> Self
+pub fn Flags::syn_ack() -> Self
+
+type InFlight
+
+pub(all) struct LinkPair {
+  client : TcpConnection
+  server : TcpConnection
+  up : @net.Link[Segment]
+  down : @net.Link[Segment]
+}
+pub fn LinkPair::connect(Self, @sim.Sim) -> Unit
+pub fn LinkPair::new(@sim.Sim, TcpConfig, TcpConfig, @net.LinkSpec, @net.LinkSpec, UInt64) -> Self
+pub fn LinkPair::summary(Self) -> String
+
+pub(all) struct Segment {
+  seq : Seq
+  ack : Seq
+  window : Int
+  flags : Flags
+  payload : Bytes
+} derive(@debug.Debug)
+pub fn Segment::label(Self) -> String
+pub fn Segment::new(Seq, Seq, Int, Flags, Bytes) -> Self
+pub fn Segment::payload_length(Self) -> Int
+pub fn Segment::wire_size(Self) -> Int
+
+pub(all) struct Seq {
+  value : UInt
+} derive(Eq, @debug.Debug)
+pub fn Seq::advance(Self, Int) -> Self
+pub fn Seq::after(Self, Self) -> Bool
+pub fn Seq::before(Self, Self) -> Bool
+pub fn Seq::distance_to(Self, Self) -> Int
+pub fn Seq::of(UInt) -> Self
+pub fn Seq::to_string(Self) -> String
+
+pub(all) struct TcpConfig {
+  mss : Int
+  receive_window : Int
+  initial_seq : UInt
+  two_msl : @sim.Time
+} derive(Eq, @debug.Debug)
+pub fn TcpConfig::new(Int, Int, UInt) -> Self
+
+pub(all) struct TcpConnection {
+  config : TcpConfig
+  mut state : TcpState
+  mut emit : (Segment) -> Unit
+  mut snd_una : Seq
+  mut snd_nxt : Seq
+  mut rcv_nxt : Seq
+  mut peer_window : Int
+  mut send_queue : Bytes
+  mut fin_seq : Seq?
+  mut peer_fin : Bool
+  inflight : Array[InFlight]
+  reorder : Array[Buffered]
+  mut delivered : Bytes
+  mut segments_sent : Int
+  mut segments_received : Int
+  mut bytes_sent : Int
+  mut bytes_acked : Int
+  mut duplicate_acks : Int
+}
+pub fn TcpConnection::bytes_acked(Self) -> Int
+pub fn TcpConnection::bytes_sent(Self) -> Int
+pub fn TcpConnection::close(Self, @sim.Sim) -> Unit
+pub fn TcpConnection::connect(Self, @sim.Sim) -> Unit
+pub fn TcpConnection::delivered(Self) -> Bytes
+pub fn TcpConnection::duplicate_acks(Self) -> Int
+pub fn TcpConnection::inflight(Self) -> Int
+pub fn TcpConnection::listen(Self) -> Unit
+pub fn TcpConnection::new(TcpConfig) -> Self
+pub fn TcpConnection::on_segment(Self, @sim.Sim, Segment) -> Unit
+pub fn TcpConnection::peer_window(Self) -> Int
+pub fn TcpConnection::rcv_nxt(Self) -> Seq
+pub fn TcpConnection::segments_received(Self) -> Int
+pub fn TcpConnection::segments_sent(Self) -> Int
+pub fn TcpConnection::send(Self, @sim.Sim, Bytes) -> Unit
+pub fn TcpConnection::set_emit(Self, (Segment) -> Unit) -> Unit
+pub fn TcpConnection::snd_nxt(Self) -> Seq
+pub fn TcpConnection::snd_una(Self) -> Seq
+pub fn TcpConnection::state(Self) -> TcpState
+
+pub(all) enum TcpState {
+  Closed
+  Listen
+  SynSent
+  SynReceived
+  Established
+  FinWait1
+  FinWait2
+  CloseWait
+  Closing
+  LastAck
+  TimeWait
+} derive(Eq, @debug.Debug)
+pub fn TcpState::render(Self) -> String
+pub impl Show for TcpState
+
+// Type aliases
+
+// Traits
