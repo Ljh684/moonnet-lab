@@ -15,6 +15,8 @@ fn main {
     "tcp" => tcp_demo()
     "lossy" => lossy_demo()
     "cc" => congestion_control_demo()
+    "run" => run_scenario(args)
+    "list" => list_scenarios()
     "help" | "-h" | "--help" => usage()
     _ => {
       println("unknown command: " + command)
@@ -42,6 +44,8 @@ fn usage() -> Unit {
   println(
     "  cc        compare a lossy transfer with and without congestion control",
   )
+  println("  run FILE  run a scenario file, with --cc NAME and --json options")
+  println("  list      list the scenario files in ./scenarios")
   println("  version   print the version")
   println("  help      print this message")
 }
@@ -101,6 +105,97 @@ fn tcp_demo() -> Unit {
     pair.client.segments_received().to_string() +
     " received",
   )
+}
+
+///|
+/// Run an experiment described by a scenario file.
+///
+/// This is the command the whole project has been building towards: the numbers
+/// come from the same library the tests exercise, and the experiment itself is a
+/// document anyone can edit and re-run.
+///
+///     moonnet run scenarios/long-fat.json --cc cubic
+///     moonnet run scenarios/long-fat.json --json > report.json
+fn run_scenario(args : Array[String]) -> Unit {
+  if args.length() < 3 {
+    println(
+      "usage: moonnet run <scenario.json> [--cc none|reno|cubic] [--json]",
+    )
+    return
+  }
+  let path = args[2]
+  let mut algorithm = ""
+  let mut as_json = false
+  let mut index = 3
+  while index < args.length() {
+    if args[index] == "--cc" && index + 1 < args.length() {
+      algorithm = args[index + 1]
+      index = index + 2
+    } else if args[index] == "--json" {
+      as_json = true
+      index = index + 1
+    } else {
+      println("unknown option: " + args[index])
+      return
+    }
+  }
+  let text = @fs.read_file_to_string(path) catch {
+    _ => {
+      println("cannot read " + path)
+      return
+    }
+  }
+  let document = match @json.parse(text) {
+    Ok(value) => value
+    Err(message) => {
+      println(path + " is not valid JSON, " + message)
+      return
+    }
+  }
+  let scenario = match @lab.Scenario::from_json(document) {
+    Ok(value) => value
+    Err(message) => {
+      println(path + " is not a usable scenario: " + message)
+      return
+    }
+  }
+  if algorithm != "" {
+    match @lab.known_algorithm(algorithm) {
+      Ok(_) => ()
+      Err(message) => {
+        println(message)
+        return
+      }
+    }
+  }
+  let experiment = if algorithm == "" {
+    scenario
+  } else {
+    { ..scenario, algorithm, }
+  }
+  let report = @lab.run(experiment)
+  if as_json {
+    println(report.to_json_text())
+  } else {
+    println(report.to_lines())
+  }
+}
+
+///|
+/// List the scenario files in the directory the tool expects them in.
+fn list_scenarios() -> Unit {
+  let names = @fs.read_dir("scenarios") catch {
+    _ => {
+      println("no scenarios directory here; run this from the project root")
+      return
+    }
+  }
+  println("scenarios:")
+  for name in names {
+    if name.has_suffix(".json") {
+      println("  " + name)
+    }
+  }
 }
 
 ///|

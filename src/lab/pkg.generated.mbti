@@ -1,0 +1,71 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "Ljh684/moonnet-lab/src/lab"
+
+import {
+  "Ljh684/moonnet-lab/src/json",
+  "Ljh684/moonnet-lab/src/sim",
+  "Ljh684/moonnet-lab/src/tcp",
+  "moonbitlang/core/debug",
+}
+
+// Values
+pub fn algorithm_of(String, Int) -> &@tcp.CongestionControl
+
+pub fn known_algorithm(String) -> Result[Unit, String]
+
+pub fn run(Scenario) -> RunReport
+
+// Errors
+
+// Types and methods
+pub(all) struct ConnectionProfile {
+  mss : Int
+  receive_window : Int
+  initial_seq : UInt
+} derive(Eq, @debug.Debug)
+
+pub(all) struct LinkProfile {
+  name : String
+  bandwidth_bps : Int64
+  delay : @sim.Time
+  loss : Double
+  queue_packets : Int
+} derive(Eq, @debug.Debug)
+
+pub(all) struct RunReport {
+  scenario : String
+  algorithm : String
+  seed : UInt64
+  payload_bytes : Int
+  delivered_bytes : Int
+  connect : @sim.Time
+  elapsed : @sim.Time
+  retransmits : Int
+  fast_retransmits : Int
+  timeouts : Int
+  round_trips : Int
+  srtt : @sim.Time
+  final_cwnd : Int
+  final_ssthresh : Int
+  uplink_dropped : Int
+  uplink_lost : Int
+} derive(Eq, @debug.Debug)
+pub fn RunReport::throughput_kbps(Self) -> Double
+pub fn RunReport::to_json_text(Self) -> String
+pub fn RunReport::to_lines(Self) -> String
+
+pub(all) struct Scenario {
+  name : String
+  seed : UInt64
+  payload_bytes : Int
+  algorithm : String
+  uplink : LinkProfile
+  downlink : LinkProfile
+  client : ConnectionProfile
+  server : ConnectionProfile
+} derive(Eq, @debug.Debug)
+pub fn Scenario::from_json(@json.Json) -> Result[Self, String]
+
+// Type aliases
+
+// Traits

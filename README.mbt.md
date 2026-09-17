@@ -25,11 +25,13 @@ moonnet-lab 把网络行为建模成纯函数：给定拓扑、流量、参数�
 | `src/tcp` | CUBIC（RFC 9438：三次增长曲线、0.7 倍乘性减少、Reno 友好区） | 完成 |
 | `src/tcp` | Vegas（用延迟而不是丢包当作拥塞信号） | 计划中 |
 | `src/aqm` | RED、CoDel 队列管理 | 计划中 |
-| `src/report` | JSON 指标与 SVG 图表 | 计划中 |
+| `src/json` | 零依赖的 JSON 读写，供场景文件与报告使用 | 完成 |
+| `src/lab` | 实验即数据：场景文件、运行、指标报告 | 完成 |
+| `src/lab` | `compare` 与 `sweep` 子命令、SVG 图表 | 下一步 |
 
 ## 快速开始
 
-需要 [MoonBit 工具链](https://www.moonbitlang.com/download)，本项目不依赖任何第三方包。
+需要 [MoonBit 工具链](https://www.moonbitlang.com/download)。**仿真库本身零依赖**；只有命令行工具为了让"实验是文件"这件事成立，引入了官方扩展库 `moonbitlang/x` 来读写文件。`moon test` 会先自动拉取它。
 
 ```bash
 moon test                        # 运行全部测试
@@ -37,6 +39,8 @@ moon run cmd/moonnet -- demo     # 跑一个内置场景并打印报告
 moon run cmd/moonnet -- tcp      # 跑一次完整的 TCP 握手与批量传输
 moon run cmd/moonnet -- lossy    # 同一场景，无丢包 vs 1% 丢包对比
 moon run cmd/moonnet -- cc       # 有无拥塞控制的对比
+moon run cmd/moonnet -- list     # 列出 scenarios 目录里的实验
+moon run cmd/moonnet -- run scenarios/long-fat.json --cc cubic
 ```
 
 demo 的输出：
@@ -112,6 +116,34 @@ CUBIC 只丢掉 30%，并且沿着三次曲线往回爬：刚丢包时曲线很�
 这张对比图是这个项目最有说服力的产出：同样的路径、同样的丢包率、同样的代码路径，只换了窗口怎么随丢包变化，差出一个数量级。
 
 需要说明的是，**拥塞控制的价值不能只看单条连接的吞吐**。真正要回答的问题是多条连接共用一条链路时会发生什么，那需要多流场景和受控丢包，是后面的事。单流场景下 Reno 就是比不限速慢，这才是它需要被证明的地方。
+
+## 实验是文件，不是代码
+
+上面那些对比最早都写在 `main.mbt` 里。现在它们是一个个可以打开、修改、重跑的文档：
+
+```bash
+moon run cmd/moonnet -- list
+moon run cmd/moonnet -- run scenarios/long-fat.json --cc reno
+moon run cmd/moonnet -- run scenarios/long-fat.json --cc cubic
+moon run cmd/moonnet -- run scenarios/long-fat.json --json > report.json
+```
+
+`scenarios/long-fat.json` 里的路径参数换成你自己的，结果就跟着变。一个实验长这样：
+
+```json
+{
+  "name": "long fat path",
+  "seed": 9,
+  "payload_bytes": 20000000,
+  "algorithm": "reno",
+  "uplink":   { "bandwidth_bps": 100000000, "delay_ms": 50, "loss": 0.01, "queue_packets": 2000 },
+  "client":   { "mss": 1000, "receive_window": 2000000 }
+}
+```
+
+只需要写一个方向时，反向链路会沿用同样的参数（`downlink` 可以省略）；两个连接端的字段也都可省略，用文档里写明的默认值。字段写错了会得到带路径的报错，而不是一个静默的默认值——`scenario.uplink.loss must be in [0, 1)` 比"配置无效"有用得多。
+
+`--json` 输出的是固定字段顺序的报告，同一场景跑两次逐字节一致，可以直接进版本库做回归对比。
 
 ## 确定性是怎么保证的
 

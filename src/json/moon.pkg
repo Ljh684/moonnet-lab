@@ -1,0 +1,10 @@
+// A small JSON reader and writer, used for scenario files and for exporting
+// measurements. Deliberately dependency-free and deliberately small: it handles
+// the subset of JSON that a configuration file or a report needs, and reports
+// exactly where a document is malformed rather than guessing.
+
+import {
+  "moonbitlang/core/string",
+  "moonbitlang/core/buffer",
+  "moonbitlang/core/encoding/utf8",
+}

@@ -1,0 +1,34 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "Ljh684/moonnet-lab/src/json"
+
+// Values
+pub fn array_text(Array[Json]) -> String
+
+pub fn object_text(Array[(String, Json)]) -> String
+
+pub fn parse(String) -> Result[Json, String]
+
+pub fn quote(String) -> String
+
+// Errors
+
+// Types and methods
+pub(all) enum Json {
+  Null
+  Bool(Bool)
+  Number(Double)
+  Text(String)
+  List(Array[Json])
+  Record(Map[String, Json])
+}
+pub fn Json::as_bool(Self) -> Bool?
+pub fn Json::as_list(Self) -> Array[Self]?
+pub fn Json::as_number(Self) -> Double?
+pub fn Json::as_text(Self) -> String?
+pub fn Json::field(Self, String) -> Self?
+pub fn Json::render(Self) -> String
+pub impl Show for Json
+
+// Type aliases
+
+// Traits

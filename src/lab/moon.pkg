@@ -1,0 +1,17 @@
+// Experiments as data: a scenario read from a document, run against the
+// protocol stack, and reported as measurements.
+//
+// This package has no dependencies outside the project, and reads its input from
+// a string rather than from a file. The command line tool is what touches the
+// file system.
+
+import {
+  "Ljh684/moonnet-lab/src/sim",
+  "Ljh684/moonnet-lab/src/net",
+  "Ljh684/moonnet-lab/src/tcp",
+  "Ljh684/moonnet-lab/src/json",
+}
+
+import {
+  "Ljh684/moonnet-lab/src/json",
+} for "test"

@@ -31,3 +31,7 @@ keywords = [
 preferred_target = "wasm"
 
 description = "Deterministic packet-level network simulator and TCP congestion-control lab for MoonBit"
+
+import {
+  "moonbitlang/x@0.5.5",
+}

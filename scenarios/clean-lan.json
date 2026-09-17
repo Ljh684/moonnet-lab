@@ -1,0 +1,15 @@
+{
+  "name": "clean local path",
+  "seed": 1,
+  "payload_bytes": 1000000,
+  "algorithm": "cubic",
+  "uplink": {
+    "bandwidth_bps": 1000000000,
+    "delay_ms": 1,
+    "queue_packets": 256
+  },
+  "client": {
+    "mss": 1000,
+    "receive_window": 2000000
+  }
+}

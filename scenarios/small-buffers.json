@@ -1,0 +1,28 @@
+{
+  "name": "small buffers",
+  "seed": 9,
+  "payload_bytes": 200000,
+  "algorithm": "none",
+  "uplink": {
+    "bandwidth_bps": 10000000,
+    "delay_ms": 25,
+    "loss": 0.01,
+    "queue_packets": 16
+  },
+  "downlink": {
+    "bandwidth_bps": 10000000,
+    "delay_ms": 25,
+    "loss": 0.01,
+    "queue_packets": 16
+  },
+  "client": {
+    "mss": 1000,
+    "receive_window": 64000,
+    "initial_seq": 1000
+  },
+  "server": {
+    "mss": 1000,
+    "receive_window": 64000,
+    "initial_seq": 5000
+  }
+}

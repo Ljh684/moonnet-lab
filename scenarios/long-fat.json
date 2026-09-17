@@ -1,0 +1,28 @@
+{
+  "name": "long fat path",
+  "seed": 9,
+  "payload_bytes": 20000000,
+  "algorithm": "reno",
+  "uplink": {
+    "bandwidth_bps": 100000000,
+    "delay_ms": 50,
+    "loss": 0.01,
+    "queue_packets": 2000
+  },
+  "downlink": {
+    "bandwidth_bps": 100000000,
+    "delay_ms": 50,
+    "loss": 0.01,
+    "queue_packets": 2000
+  },
+  "client": {
+    "mss": 1000,
+    "receive_window": 2000000,
+    "initial_seq": 1000
+  },
+  "server": {
+    "mss": 1000,
+    "receive_window": 2000000,
+    "initial_seq": 5000
+  }
+}

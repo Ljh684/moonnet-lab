@@ -2,7 +2,10 @@ import {
   "Ljh684/moonnet-lab/src/sim",
   "Ljh684/moonnet-lab/src/net",
   "Ljh684/moonnet-lab/src/tcp",
+  "Ljh684/moonnet-lab/src/lab",
+  "Ljh684/moonnet-lab/src/json",
   "moonbitlang/core/env",
+  "moonbitlang/x/fs",
 }
 
 pkgtype(kind: "executable")
