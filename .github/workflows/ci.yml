@@ -20,6 +20,11 @@ jobs:
       - name: Show toolchain version
         run: moon version --all
 
+      # The command line tool reads scenario files, which needs the official
+      # extended library, and a fresh runner has an index that predates it.
+      - name: Update the package registry
+        run: moon update
+
       - name: Check formatting
         run: moon fmt --check
 
