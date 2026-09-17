@@ -11,9 +11,29 @@ import {
 // Values
 pub fn algorithm_of(String, Int) -> &@tcp.CongestionControl
 
+pub fn algorithms_of(String) -> Result[Array[String], String]
+
+pub fn compare(Scenario, Array[String]) -> Array[(String, RunReport)]
+
+pub fn compare_json(Scenario, Array[(String, RunReport)]) -> String
+
+pub fn compare_lines(Scenario, Array[(String, RunReport)]) -> String
+
+pub fn format_fixed(Double, Int) -> String
+
 pub fn known_algorithm(String) -> Result[Unit, String]
 
+pub fn render_table(Array[String], Array[Array[String]]) -> String
+
 pub fn run(Scenario) -> RunReport
+
+pub fn sweep(Scenario, SweepField, Double, Double, Int, Array[String]) -> Array[SweepRow]
+
+pub fn sweep_json(Scenario, SweepField, Array[SweepRow], Array[String]) -> String
+
+pub fn sweep_lines(Scenario, SweepField, Array[SweepRow], Array[String]) -> String
+
+pub fn sweep_values(Double, Double, Int) -> Array[Double]
 
 // Errors
 
@@ -65,6 +85,21 @@ pub(all) struct Scenario {
   server : ConnectionProfile
 } derive(Eq, @debug.Debug)
 pub fn Scenario::from_json(@json.Json) -> Result[Self, String]
+
+pub(all) enum SweepField {
+  Loss
+  DelayMs
+  BandwidthMbps
+  Seed
+}
+pub fn SweepField::apply(Self, Scenario, Double) -> Scenario
+pub fn SweepField::parse(String) -> Result[Self, String]
+pub fn SweepField::render(Self) -> String
+
+pub(all) struct SweepRow {
+  value : Double
+  results : Array[(String, RunReport)]
+}
 
 // Type aliases
 

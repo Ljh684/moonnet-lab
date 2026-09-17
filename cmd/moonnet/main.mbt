@@ -16,6 +16,8 @@ fn main {
     "lossy" => lossy_demo()
     "cc" => congestion_control_demo()
     "run" => run_scenario(args)
+    "compare" => compare_scenarios(args)
+    "sweep" => sweep_scenarios(args)
     "list" => list_scenarios()
     "help" | "-h" | "--help" => usage()
     _ => {
@@ -45,6 +47,12 @@ fn usage() -> Unit {
     "  cc        compare a lossy transfer with and without congestion control",
   )
   println("  run FILE  run a scenario file, with --cc NAME and --json options")
+  println(
+    "  compare FILE --cc reno,cubic   run one scenario under several algorithms",
+  )
+  println(
+    "  sweep FILE --field loss --from 0 --to 0.02 --steps 5 --cc reno,cubic",
+  )
   println("  list      list the scenario files in ./scenarios")
   println("  version   print the version")
   println("  help      print this message")
@@ -105,6 +113,179 @@ fn tcp_demo() -> Unit {
     pair.client.segments_received().to_string() +
     " received",
   )
+}
+
+///|
+/// Run one scenario under several algorithms.
+///
+///     moonnet compare scenarios/long-fat.json --cc reno,cubic
+fn compare_scenarios(args : Array[String]) -> Unit {
+  let options = match
+    parse_common(args, "compare <scenario.json> --cc reno,cubic") {
+    Ok(value) => value
+    Err(_) => return
+  }
+  let scenario = match options.scenario {
+    Some(value) => value
+    None => return
+  }
+  let results = @lab.compare(scenario, options.algorithms)
+  if options.as_json {
+    println(@lab.compare_json(scenario, results))
+  } else {
+    println(@lab.compare_lines(scenario, results))
+  }
+}
+
+///|
+/// Run a scenario once per value of one parameter.
+///
+///     moonnet sweep scenarios/long-fat.json --field loss --from 0 --to 0.02 --steps 5 --cc reno,cubic
+fn sweep_scenarios(args : Array[String]) -> Unit {
+  let options = match
+    parse_common(
+      args, "sweep <scenario.json> --field loss --from 0 --to 0.02 --steps 5 --cc reno,cubic",
+    ) {
+    Ok(value) => value
+    Err(_) => return
+  }
+  let scenario = match options.scenario {
+    Some(value) => value
+    None => return
+  }
+  let field = match @lab.SweepField::parse(options.field) {
+    Ok(value) => value
+    Err(message) => {
+      println(message)
+      return
+    }
+  }
+  let rows = @lab.sweep(
+    scenario,
+    field,
+    options.from,
+    options.to,
+    options.steps,
+    options.algorithms,
+  )
+  if options.as_json {
+    println(@lab.sweep_json(scenario, field, rows, options.algorithms))
+  } else {
+    println(@lab.sweep_lines(scenario, field, rows, options.algorithms))
+  }
+}
+
+///|
+/// The options `compare` and `sweep` share.
+struct CommonOptions {
+  scenario : @lab.Scenario?
+  algorithms : Array[String]
+  field : String
+  from : Double
+  to : Double
+  steps : Int
+  as_json : Bool
+}
+
+///|
+/// Read the scenario file and the options both commands accept.
+fn parse_common(
+  args : Array[String],
+  usage : String,
+) -> Result[CommonOptions, String] {
+  if args.length() < 3 {
+    println("usage: moonnet " + usage)
+    return Err("missing arguments")
+  }
+  let scenario = match load_scenario(args[2]) {
+    Ok(value) => value
+    Err(message) => {
+      println(message)
+      return Err(message)
+    }
+  }
+  let mut algorithms : Array[String] = ["reno"]
+  let mut field = "loss"
+  let mut from = 0.0
+  let mut to = 0.01
+  let mut steps = 5
+  let mut as_json = false
+  let mut index = 3
+  while index < args.length() {
+    let option = args[index]
+    let has_value = index + 1 < args.length()
+    if option == "--cc" && has_value {
+      match @lab.algorithms_of(args[index + 1]) {
+        Ok(value) => algorithms = value
+        Err(message) => {
+          println(message)
+          return Err(message)
+        }
+      }
+      index = index + 2
+    } else if option == "--field" && has_value {
+      field = args[index + 1]
+      index = index + 2
+    } else if option == "--from" && has_value {
+      from = match parse_number(args[index + 1]) {
+        Ok(value) => value
+        Err(message) => {
+          println(message)
+          return Err(message)
+        }
+      }
+      index = index + 2
+    } else if option == "--to" && has_value {
+      to = match parse_number(args[index + 1]) {
+        Ok(value) => value
+        Err(message) => {
+          println(message)
+          return Err(message)
+        }
+      }
+      index = index + 2
+    } else if option == "--steps" && has_value {
+      steps = match parse_number(args[index + 1]) {
+        Ok(value) => value.to_int()
+        Err(message) => {
+          println(message)
+          return Err(message)
+        }
+      }
+      index = index + 2
+    } else if option == "--json" {
+      as_json = true
+      index = index + 1
+    } else {
+      println("unknown option: " + option)
+      return Err(option)
+    }
+  }
+  Ok({ scenario: Some(scenario), algorithms, field, from, to, steps, as_json, })
+}
+
+///|
+/// Read and check a scenario file, reporting what was wrong with it.
+fn load_scenario(path : String) -> Result[@lab.Scenario, String] {
+  let text = @fs.read_file_to_string(path) catch {
+    _ => return Err("cannot read " + path)
+  }
+  let document = match @json.parse(text) {
+    Ok(value) => value
+    Err(message) => return Err(path + " is not valid JSON, " + message)
+  }
+  match @lab.Scenario::from_json(document) {
+    Ok(value) => Ok(value)
+    Err(message) => Err(path + " is not a usable scenario: " + message)
+  }
+}
+
+///|
+fn parse_number(text : String) -> Result[Double, String] {
+  let value = @string.parse_double(text) catch {
+    _ => return Err("\"" + text + "\" is not a number")
+  }
+  Ok(value)
 }
 
 ///|

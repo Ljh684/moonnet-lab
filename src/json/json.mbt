@@ -372,6 +372,51 @@ pub fn array_text(items : Array[Json]) -> String {
 }
 
 ///|
+/// An object whose field values are already rendered JSON text.
+///
+/// Composing documents out of smaller ones beats building a tree and hoping the
+/// map preserves the order: reports and comparisons need a stable layout, and
+/// this keeps the layout in the code that knows what the fields mean.
+pub fn object_of_texts(fields : Array[(String, String)]) -> String {
+  let out = @buffer.Buffer::Buffer()
+  out.write_byte(b'{')
+  let mut index = 0
+  while index < fields.length() {
+    if index > 0 {
+      out.write_byte(b',')
+    }
+    write_text(out, fields[index].0)
+    out.write_byte(b':')
+    write_raw(out, fields[index].1)
+    index = index + 1
+  }
+  out.write_byte(b'}')
+  @utf8.decode_lossy(out.to_bytes())
+}
+
+///|
+/// An array whose items are already rendered JSON text.
+pub fn array_of_texts(items : Array[String]) -> String {
+  let out = @buffer.Buffer::Buffer()
+  out.write_byte(b'[')
+  let mut index = 0
+  while index < items.length() {
+    if index > 0 {
+      out.write_byte(b',')
+    }
+    write_raw(out, items[index])
+    index = index + 1
+  }
+  out.write_byte(b']')
+  @utf8.decode_lossy(out.to_bytes())
+}
+
+///|
+fn write_raw(out : @buffer.Buffer, text : String) -> Unit {
+  out.write_bytes(@utf8.encode(text))
+}
+
+///|
 /// Render a value. Object fields come out in the order the map happens to hold
 /// them, which is fine for a document that is read rather than compared; the
 /// reports that need a stable byte-for-byte rendering write their own layout.

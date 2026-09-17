@@ -36,3 +36,10 @@ jobs:
 
       - name: Run the demo
         run: moon run cmd/moonnet -- demo
+
+      # Exercises the scenario files end to end: reading them from disk,
+      # running one, and comparing algorithms on the same path.
+      - name: Run the scenario tools
+        run: |
+          moon run cmd/moonnet -- list
+          moon run cmd/moonnet -- compare scenarios/long-fat.json --cc reno,cubic

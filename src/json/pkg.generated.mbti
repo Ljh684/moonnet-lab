@@ -2,7 +2,11 @@
 package "Ljh684/moonnet-lab/src/json"
 
 // Values
+pub fn array_of_texts(Array[String]) -> String
+
 pub fn array_text(Array[Json]) -> String
+
+pub fn object_of_texts(Array[(String, String)]) -> String
 
 pub fn object_text(Array[(String, Json)]) -> String
 

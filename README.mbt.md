@@ -27,7 +27,8 @@ moonnet-lab 把网络行为建模成纯函数：给定拓扑、流量、参数�
 | `src/aqm` | RED、CoDel 队列管理 | 计划中 |
 | `src/json` | 零依赖的 JSON 读写，供场景文件与报告使用 | 完成 |
 | `src/lab` | 实验即数据：场景文件、运行、指标报告 | 完成 |
-| `src/lab` | `compare` 与 `sweep` 子命令、SVG 图表 | 下一步 |
+| `src/lab` | `compare` 与 `sweep` 子命令 | 完成 |
+| `src/lab` | SVG 图表、多流场景、受控丢包（按序号而不是按发送顺序） | 下一步 |
 
 ## 快速开始
 
@@ -41,6 +42,8 @@ moon run cmd/moonnet -- lossy    # 同一场景，无丢包 vs 1% 丢包对比
 moon run cmd/moonnet -- cc       # 有无拥塞控制的对比
 moon run cmd/moonnet -- list     # 列出 scenarios 目录里的实验
 moon run cmd/moonnet -- run scenarios/long-fat.json --cc cubic
+moon run cmd/moonnet -- compare scenarios/long-fat.json --cc reno,cubic
+moon run cmd/moonnet -- sweep scenarios/small-buffers.json --field loss --from 0 --to 0.02 --steps 5
 ```
 
 demo 的输出：
@@ -144,6 +147,52 @@ moon run cmd/moonnet -- run scenarios/long-fat.json --json > report.json
 只需要写一个方向时，反向链路会沿用同样的参数（`downlink` 可以省略）；两个连接端的字段也都可省略，用文档里写明的默认值。字段写错了会得到带路径的报错，而不是一个静默的默认值——`scenario.uplink.loss must be in [0, 1)` 比"配置无效"有用得多。
 
 `--json` 输出的是固定字段顺序的报告，同一场景跑两次逐字节一致，可以直接进版本库做回归对比。
+
+## 对比与扫描
+
+有了场景文件，比较两个算法就是把同一份文件跑两遍：
+
+```bash
+moon run cmd/moonnet -- compare scenarios/long-fat.json --cc reno,cubic
+```
+
+```text
+scenario:   long fat path (seed 9, 20000000 bytes)
+
+algorithm  elapsed    throughput  retransmits  fast  timeouts  final cwnd
+reno       1296.510s       123.4          367   308        59        2000
+cubic       164.703s       971.4          185   180         5       15000
+
+note:       each row draws its own losses, because a link decides per
+            transmission and the algorithms transmit in different orders.
+```
+
+最后那两行不是客套话。同一种子保证的是**同样的随机源**，不是**同样的丢包位置**——链路按每次发送抽签，而两个算法发送的顺序不同。所以这张表比较的是"同样的条件下两种行为"，不是"同一串丢包下两种应对"。要做到后者，丢包必须成为数据本身的属性（按序号哈希）而不是发送顺序的属性，那是一个更大的改动，列在路线图里。
+
+扫描一个参数：
+
+```bash
+moon run cmd/moonnet -- sweep scenarios/small-buffers.json --field loss --from 0 --to 0.02 --steps 5 --cc reno,cubic
+```
+
+```text
+scenario:   small buffers, sweeping loss
+
+loss    reno kbit/s  cubic kbit/s
+0.0000        919.5         744.4
+0.0100        597.2         601.7
+0.0200        574.4         414.1
+
+times:
+loss    reno    cubic
+0.0000  1.740s  2.149s
+0.0100  2.678s  2.659s
+0.0200  2.785s  3.863s
+```
+
+这组数据本身很有意思，而且和前面长肥链路的结论**并不矛盾**：在这个只有 64 KB 接收窗口、64 毫秒往返的场景里，两个算法都被接收窗口限制住了，CUBIC 的保守反而让它更慢。CUBIC 的优势出现在窗口足够大、丢包成为主要限制的地方——也就是长肥链路。**同一组算法，换个场景结论就反过来**，这正是需要一个能改参数的实验平台的原因。
+
+可扫描的字段：`loss`、`delay_ms`、`bandwidth_mbps`、`seed`。
 
 ## 确定性是怎么保证的
 

@@ -159,3 +159,161 @@ test "the three algorithms are all selectable by name" {
   inspect(@lab.known_algorithm("cubic") is Ok(_), content="true")
   inspect(@lab.known_algorithm("vegas") is Err(_), content="true")
 }
+
+///|
+/// A scenario small enough to run several times inside one test.
+let quick_document : String =
+  #|{
+  #|  "name": "quick",
+  #|  "seed": 3,
+  #|  "payload_bytes": 60000,
+  #|  "algorithm": "reno",
+  #|  "uplink": { "bandwidth_bps": 10000000, "delay_ms": 5, "loss": 0.01, "queue_packets": 32 },
+  #|  "client": { "mss": 1000, "receive_window": 32000 }
+  #|}
+
+///|
+test "comparing runs every algorithm on the same scenario" {
+  let scenario = scenario_of(quick_document)
+  let results = @lab.compare(scenario, ["none", "reno", "cubic"])
+  inspect(results.length(), content="3")
+  inspect(results[0].0, content="none")
+  inspect(results[1].0, content="reno")
+  inspect(results[2].0, content="cubic")
+  for entry in results {
+    // Every algorithm delivers the whole payload; they differ in how long they
+    // take and how much they had to send again.
+    inspect(entry.1.delivered_bytes, content="60000")
+    inspect(entry.1.seed, content="3")
+  }
+  // The algorithm in the report comes from the connection, not from the request.
+  inspect(results[2].1.algorithm, content="cubic")
+}
+
+///|
+test "a comparison renders as a table and as a document" {
+  let scenario = scenario_of(quick_document)
+  let results = @lab.compare(scenario, ["reno", "cubic"])
+  let lines = @lab.compare_lines(scenario, results)
+  inspect(lines.contains("algorithm"), content="true")
+  inspect(lines.contains("final cwnd"), content="true")
+  inspect(lines.contains("quick"), content="true")
+  // A lossy scenario says so rather than letting the reader assume the rows saw
+  // the same lost packets.
+  inspect(lines.contains("each row draws its own losses"), content="true")
+  let document = match @json.parse(@lab.compare_json(scenario, results)) {
+    Ok(value) => value
+    Err(message) => abort("the comparison is not valid JSON: " + message)
+  }
+  inspect(
+    document.field("results").unwrap().as_list().unwrap().length(),
+    content="2",
+  )
+}
+
+///|
+test "a comparison is the same twice" {
+  let scenario = scenario_of(quick_document)
+  let first = @lab.compare(scenario, ["reno", "cubic"])
+  let second = @lab.compare(scenario, ["reno", "cubic"])
+  inspect(
+    @lab.compare_lines(scenario, first) == @lab.compare_lines(scenario, second),
+    content="true",
+  )
+  inspect(
+    @lab.compare_json(scenario, first) == @lab.compare_json(scenario, second),
+    content="true",
+  )
+}
+
+///|
+test "sweep values include both endpoints" {
+  inspect(@lab.sweep_values(0.0, 1.0, 5).length(), content="5")
+  inspect(@lab.sweep_values(0.0, 1.0, 5)[0], content="0")
+  inspect(@lab.sweep_values(0.0, 1.0, 5)[2], content="0.5")
+  inspect(@lab.sweep_values(0.0, 1.0, 5)[4], content="1")
+  // A single step is a point, not a division by zero.
+  inspect(@lab.sweep_values(0.25, 1.0, 1).length(), content="1")
+  inspect(@lab.sweep_values(0.25, 1.0, 1)[0], content="0.25")
+}
+
+///|
+test "a sweep field changes the parameter it names, in both directions" {
+  let scenario = scenario_of(quick_document)
+  let lossy = @lab.SweepField::Loss.apply(scenario, 0.05)
+  inspect(lossy.uplink.loss, content="0.05")
+  inspect(lossy.downlink.loss, content="0.05")
+  // Only the named field moves.
+  inspect(lossy.uplink.delay.render(), content="5.000ms")
+  inspect(lossy.payload_bytes, content="60000")
+  let slow = @lab.SweepField::DelayMs.apply(scenario, 40.0)
+  inspect(slow.uplink.delay.render(), content="40.000ms")
+  inspect(slow.downlink.delay.render(), content="40.000ms")
+  inspect(slow.uplink.loss, content="0.01")
+  let narrow = @lab.SweepField::BandwidthMbps.apply(scenario, 2.0)
+  inspect(narrow.uplink.bandwidth_bps, content="2000000")
+  inspect(narrow.downlink.bandwidth_bps, content="2000000")
+  let reseeded = @lab.SweepField::Seed.apply(scenario, 42.0)
+  inspect(reseeded.seed, content="42")
+}
+
+///|
+test "a sweep runs once per value and reports the value it used" {
+  let scenario = scenario_of(quick_document)
+  let field = @lab.SweepField::Loss
+  let rows = @lab.sweep(scenario, field, 0.0, 0.02, 3, ["reno"])
+  inspect(rows.length(), content="3")
+  inspect(rows[0].value, content="0")
+  inspect(rows[1].value, content="0.01")
+  inspect(rows[2].value, content="0.02")
+  for row in rows {
+    inspect(row.results.length(), content="1")
+    inspect(row.results[0].1.delivered_bytes, content="60000")
+  }
+  // A clean path is faster than a lossy one, which is the whole point of
+  // sweeping the loss rate.
+  inspect(
+    rows[0].results[0].1.elapsed.ps < rows[2].results[0].1.elapsed.ps,
+    content="true",
+  )
+  let lines = @lab.sweep_lines(scenario, field, rows, ["reno"])
+  inspect(lines.contains("sweeping loss"), content="true")
+  let document = match
+    @json.parse(@lab.sweep_json(scenario, field, rows, ["reno"])) {
+    Ok(value) => value
+    Err(message) => abort("the sweep is not valid JSON: " + message)
+  }
+  inspect(
+    document.field("rows").unwrap().as_list().unwrap().length(),
+    content="3",
+  )
+}
+
+///|
+test "tables line up their columns" {
+  let table = @lab.render_table(["a", "bbbb"], [["xx", "1"], ["y", "22"]])
+  inspect(table, content="a   bbbb\nxx     1\ny     22")
+}
+
+///|
+test "fixed point numbers keep their decimals" {
+  inspect(@lab.format_fixed(1.5, 1), content="1.5")
+  inspect(@lab.format_fixed(2.0, 3), content="2.000")
+  inspect(@lab.format_fixed(0.25, 4), content="0.2500")
+  inspect(@lab.format_fixed(1234.567, 1), content="1234.5")
+  inspect(@lab.format_fixed(9.0, 0), content="9")
+}
+
+///|
+test "algorithm lists are parsed and checked" {
+  let names = match @lab.algorithms_of("reno,cubic") {
+    Ok(value) => value
+    Err(message) => abort("expected the list to parse: " + message)
+  }
+  inspect(names.length(), content="2")
+  inspect(names[1], content="cubic")
+  // Spaces are tolerated, empty entries are dropped.
+  inspect(@lab.algorithms_of(" reno , ").unwrap().length(), content="1")
+  inspect(@lab.algorithms_of("reno,nonesuch") is Err(_), content="true")
+  inspect(@lab.algorithms_of("") is Err(_), content="true")
+}
