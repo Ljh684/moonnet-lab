@@ -165,3 +165,15 @@ pub fn fnv1a64(text : String) -> UInt64 {
   }
   hash
 }
+
+///|
+/// Combine two 64-bit values into one, so that the pair determines the result
+/// and the order matters.
+///
+/// This is what gives a packet a fate derived from its identity: the same
+/// identity on the same link always produces the same number, whatever else
+/// happened on that link in between.
+pub fn mix64(a : UInt64, b : UInt64) -> UInt64 {
+  let seeder = SplitMix64::new(a ^ (b * 0x9E3779B97F4A7C15UL))
+  seeder.next_u64()
+}

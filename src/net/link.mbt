@@ -62,6 +62,10 @@ pub fn LinkSpec::with_loss(self : LinkSpec, rate : Double) -> LinkSpec {
 pub(all) struct Link[T] {
   spec : LinkSpec
   rng : @sim.Rng
+  /// The number that decides loss for a packet identity on this link. Derived
+  /// from the seed and the link's name, so two links configured alike but named
+  /// differently do not lose the same packets.
+  loss_key : UInt64
   queue : PacketQueue[T]
   deliver : (Packet[T]) -> Unit
   mut busy_until : @sim.Time
@@ -81,6 +85,7 @@ pub fn[T] Link::new(
   {
     spec,
     rng: @sim.Rng::new(seed).fork("link/" + spec.name),
+    loss_key: @sim.mix64(seed, @sim.fnv1a64(spec.name)),
     queue: PacketQueue::new(spec.queue),
     deliver,
     busy_until: @sim.Time::zero(),
@@ -147,10 +152,16 @@ pub fn[T] Link::pump(self : Link[T], sim : @sim.Sim) -> Unit {
       self.bytes_sent = self.bytes_sent + packet.size.to_int64()
       let link_name = self.spec.name
       let id = packet.id
-      if self.draw_loss(sim) {
+      if self.draw_loss(sim, packet.tag) {
         self.lost = self.lost + 1
         if sim.is_recording() {
-          sim.note(link_name + " loses #" + id.to_string())
+          sim.note(
+            link_name +
+            " loses #" +
+            id.to_string() +
+            " tag " +
+            packet.tag.to_string(),
+          )
         }
       } else {
         sim.at(arrival, link_name + " delivers #" + id.to_string(), () => {
@@ -165,13 +176,27 @@ pub fn[T] Link::pump(self : Link[T], sim : @sim.Sim) -> Unit {
 ///|
 /// Decide whether the transmission that just started is lost.
 ///
+/// A packet that carries a tag is judged on its identity: the same tag on the
+/// same link always meets the same fate, whatever else was transmitted in
+/// between. That is what lets two senders be compared on the same lost packets
+/// rather than merely on the same conditions.
+///
+/// A packet with no tag — an acknowledgment, whose identity is not stable
+/// because the same acknowledgment is sent repeatedly — falls back to drawing
+/// from the link's own stream. Its loss pattern is therefore still a property of
+/// transmission order, which is worth knowing when reading a comparison: the
+/// data loss is controlled, the acknowledgment loss is not.
+///
 /// The draw is skipped entirely on a loss-free link, so adding a reliable link
 /// to a scenario cannot shift the random stream of the links around it.
-pub fn[T] Link::draw_loss(self : Link[T], sim : @sim.Sim) -> Bool {
+pub fn[T] Link::draw_loss(self : Link[T], sim : @sim.Sim, tag : UInt64) -> Bool {
   if self.spec.loss_rate <= 0.0 {
     false
   } else if self.spec.loss_rate >= 1.0 {
     true
+  } else if tag != 0UL {
+    let draw = @sim.mix64(self.loss_key, tag)
+    (draw >> 11).to_double() / 9007199254740992.0 < self.spec.loss_rate
   } else {
     sim.rng().next_double() < self.spec.loss_rate
   }

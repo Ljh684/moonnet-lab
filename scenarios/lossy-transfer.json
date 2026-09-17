@@ -1,0 +1,20 @@
+{
+  "name": "lossy transfer",
+  "seed": 9,
+  "payload_bytes": 50000,
+  "algorithm": "reno",
+  "uplink": {
+    "bandwidth_bps": 10000000,
+    "delay_ms": 25,
+    "loss": 0.01,
+    "queue_packets": 64
+  },
+  "client": {
+    "mss": 1000,
+    "receive_window": 8192
+  },
+  "server": {
+    "mss": 1000,
+    "receive_window": 8192
+  }
+}

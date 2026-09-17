@@ -41,18 +41,28 @@ pub(all) struct Packet[T] {
   flow : Int
   kind : PacketKind
   size : Int
+  tag : UInt64
   payload : T
 }
 
 ///|
+/// Build a packet.
+///
+/// `tag` is the packet's identity: a number the sender derives from what the
+/// packet *is* rather than from when it was sent. A link decides loss from the
+/// tag, so the same packet meets the same fate on the same link whatever else is
+/// in flight — which is what turns a comparison between two senders into a
+/// controlled experiment. Zero means "no identity", and the link falls back to
+/// drawing from its own stream.
 pub fn[T] Packet::new(
   id : Int,
   flow : Int,
   kind : PacketKind,
   size : Int,
+  tag : UInt64,
   payload : T,
 ) -> Packet[T] {
-  { id, flow, kind, size, payload, }
+  { id, flow, kind, size, tag, payload, }
 }
 
 ///|

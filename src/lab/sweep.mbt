@@ -94,10 +94,92 @@ pub fn sweep_values(from : Double, to : Double, steps : Int) -> Array[Double] {
 }
 
 ///|
+/// What several runs of the same scenario under one algorithm add up to.
+///
+/// A single run is not a measurement. In a lossy scenario the outcome is
+/// dominated by how many times the retransmission timer expires, and each of
+/// those costs up to the sixty-second backoff ceiling: a handful of them swings
+/// the total by an order of magnitude while the path, the loss rate and the
+/// seed are all identical. Averaging over several seeds averages over loss
+/// patterns instead, and the range says how much the answer depends on the
+/// draw.
+pub(all) struct RunSummary {
+  algorithm : String
+  runs : Int
+  mean_elapsed : @sim.Time
+  min_elapsed : @sim.Time
+  max_elapsed : @sim.Time
+  mean_throughput_kbps : Double
+  /// Totals across the runs, not averages: these are counts of things that
+  /// happened.
+  retransmits : Int
+  fast_retransmits : Int
+  timeouts : Int
+  delivered_bytes : Int
+} derive(Eq, Debug)
+
+///|
+/// Run one scenario under one algorithm over a range of seeds and summarise.
+pub fn summarise(
+  scenario : Scenario,
+  algorithm : String,
+  seeds : Int,
+) -> RunSummary {
+  let count = if seeds < 1 { 1 } else { seeds }
+  let mut total = 0L
+  let mut fastest = 0L
+  let mut slowest = 0L
+  let mut retransmits = 0
+  let mut fast_retransmits = 0
+  let mut timeouts = 0
+  let mut delivered = 0
+  let mut index = 0
+  while index < count {
+    let experiment = {
+      ..scenario,
+      algorithm,
+      seed: scenario.seed + index.to_uint64(),
+    }
+    let report = run(experiment)
+    let elapsed = report.elapsed.ps
+    total = total + elapsed
+    if index == 0 || elapsed < fastest {
+      fastest = elapsed
+    }
+    if index == 0 || elapsed > slowest {
+      slowest = elapsed
+    }
+    retransmits = retransmits + report.retransmits
+    fast_retransmits = fast_retransmits + report.fast_retransmits
+    timeouts = timeouts + report.timeouts
+    delivered = delivered + report.delivered_bytes
+    index = index + 1
+  }
+  let mean = total / count.to_int64()
+  let seconds = mean.to_double() / 1_000_000_000_000.0
+  {
+    algorithm,
+    runs: count,
+    mean_elapsed: @sim.Time::from_ps(mean),
+    min_elapsed: @sim.Time::from_ps(fastest),
+    max_elapsed: @sim.Time::from_ps(slowest),
+    mean_throughput_kbps: if seconds <= 0.0 {
+      0.0
+    } else {
+      scenario.payload_bytes.to_double() * 8.0 / seconds / 1000.0
+    },
+    retransmits,
+    fast_retransmits,
+    timeouts,
+    delivered_bytes: delivered,
+  }
+}
+
+///|
 /// One row of a sweep: the parameter value, and what each algorithm did with it.
 pub(all) struct SweepRow {
   value : Double
-  results : Array[(String, RunReport)]
+  results : Array[(String, RunSummary)]
 }
 
 ///|
@@ -114,11 +196,11 @@ pub(all) struct SweepRow {
 pub fn compare(
   scenario : Scenario,
   algorithms : Array[String],
-) -> Array[(String, RunReport)] {
-  let results : Array[(String, RunReport)] = []
+  seeds? : Int = 1,
+) -> Array[(String, RunSummary)] {
+  let results : Array[(String, RunSummary)] = []
   for name in algorithms {
-    let experiment = { ..scenario, algorithm: name, }
-    results.push((name, run(experiment)))
+    results.push((name, summarise(scenario, name, seeds)))
   }
   results
 }
@@ -132,12 +214,13 @@ pub fn sweep(
   to : Double,
   steps : Int,
   algorithms : Array[String],
+  seeds? : Int = 1,
 ) -> Array[SweepRow] {
   let rows : Array[SweepRow] = []
   for value in sweep_values(from, to, steps) {
     rows.push({
       value,
-      results: compare(field.apply(scenario, value), algorithms),
+      results: compare(field.apply(scenario, value), algorithms, seeds~),
     })
   }
   rows
@@ -212,7 +295,8 @@ fn pad_row(row : Array[String], width : Array[Int], heading : Bool) -> String {
 /// The comparison as a table plus a line naming the scenario.
 pub fn compare_lines(
   scenario : Scenario,
-  results : Array[(String, RunReport)],
+  results : Array[(String, RunSummary)],
+  seeds? : Int = 1,
 ) -> String {
   let rows : Array[Array[String]] = []
   for entry in results {
@@ -224,10 +308,13 @@ pub fn compare_lines(
   scenario.seed.to_string() +
   ", " +
   scenario.payload_bytes.to_string() +
-  " bytes)\n\n" +
+  " bytes, " +
+  seeds.to_string() +
+  (if seeds == 1 { " run each" } else { " runs each" }) +
+  ")\n\n" +
   render_table(
     [
-      "algorithm", "elapsed", "throughput", "retransmits", "fast", "timeouts", "final cwnd",
+      "algorithm", "mean", "fastest", "slowest", "throughput", "retransmits", "timeouts",
     ],
     rows,
   ) +
@@ -235,16 +322,14 @@ pub fn compare_lines(
 }
 
 ///|
-/// Say so when the rows are not seeing the same losses.
-///
-/// Every link decides loss per transmission, and two algorithms transmit in
-/// different orders, so the same seed does not give the same lost packets. The
-/// comparison is of behaviour under the same conditions, which is worth stating
-/// rather than leaving for the reader to work out.
+/// Say what the comparison controls and what it does not.
 fn loss_note(scenario : Scenario) -> String {
   if scenario.uplink.loss > 0.0 || scenario.downlink.loss > 0.0 {
-    "\n\nnote:       each row draws its own losses, because a link decides per\n" +
-    "            transmission and the algorithms transmit in different orders."
+    "\n\nnote:       loss follows packet identity, so every row meets the same lost\n" +
+    "            packets on a given seed. Acknowledgments carry no identity and\n" +
+    "            fall back to transmission order, so their losses still differ.\n" +
+    "            In a lossy scenario a few sixty-second timeouts dominate the\n" +
+    "            total; more than one run is what makes the mean meaningful."
   } else {
     ""
   }
@@ -311,33 +396,36 @@ fn sweep_time_rows(
 }
 
 ///|
-fn report_row(name : String, report : RunReport) -> Array[String] {
+fn report_row(name : String, summary : RunSummary) -> Array[String] {
   [
     name,
-    report.elapsed.render(),
-    format_fixed(report.throughput_kbps(), 1),
-    report.retransmits.to_string(),
-    report.fast_retransmits.to_string(),
-    report.timeouts.to_string(),
-    report.final_cwnd.to_string(),
+    summary.mean_elapsed.render(),
+    summary.min_elapsed.render(),
+    summary.max_elapsed.render(),
+    format_fixed(summary.mean_throughput_kbps, 1),
+    summary.retransmits.to_string(),
+    summary.timeouts.to_string(),
   ]
 }
 
 ///|
-fn throughput_of(results : Array[(String, RunReport)], name : String) -> String {
+fn throughput_of(
+  results : Array[(String, RunSummary)],
+  name : String,
+) -> String {
   for entry in results {
     if entry.0 == name {
-      return format_fixed(entry.1.throughput_kbps(), 1)
+      return format_fixed(entry.1.mean_throughput_kbps, 1)
     }
   }
   "-"
 }
 
 ///|
-fn elapsed_of(results : Array[(String, RunReport)], name : String) -> String {
+fn elapsed_of(results : Array[(String, RunSummary)], name : String) -> String {
   for entry in results {
     if entry.0 == name {
-      return entry.1.elapsed.render()
+      return entry.1.mean_elapsed.render()
     }
   }
   "-"
@@ -383,12 +471,14 @@ pub fn format_fixed(value : Double, decimals : Int) -> String {
 /// The comparison as a document.
 pub fn compare_json(
   scenario : Scenario,
-  results : Array[(String, RunReport)],
+  results : Array[(String, RunSummary)],
+  seeds? : Int = 1,
 ) -> String {
   @json.object_of_texts([
     ("scenario", @json.quote(scenario.name)),
     ("seed", scenario.seed.to_string()),
-    ("results", @json.array_of_texts(reports_json(results))),
+    ("runs", seeds.to_string()),
+    ("results", @json.array_of_texts(summaries_json(results))),
   ])
 }
 
@@ -399,6 +489,7 @@ pub fn sweep_json(
   field : SweepField,
   rows : Array[SweepRow],
   algorithms : Array[String],
+  seeds? : Int = 1,
 ) -> String {
   let entries : Array[String] = []
   for row in rows {
@@ -406,19 +497,20 @@ pub fn sweep_json(
       @json.object_of_texts([
         (field.render(), format_fixed(row.value, 6)),
         ("algorithms", @json.array_of_texts(quoted(algorithms))),
-        ("results", @json.array_of_texts(reports_json(row.results))),
+        ("results", @json.array_of_texts(summaries_json(row.results))),
       ]),
     )
   }
   @json.object_of_texts([
     ("scenario", @json.quote(scenario.name)),
     ("field", @json.quote(field.render())),
+    ("runs", seeds.to_string()),
     ("rows", @json.array_of_texts(entries)),
   ])
 }
 
 ///|
-fn reports_json(results : Array[(String, RunReport)]) -> Array[String] {
+fn summaries_json(results : Array[(String, RunSummary)]) -> Array[String] {
   let parts : Array[String] = []
   for entry in results {
     parts.push(entry.1.to_json_text())

@@ -74,10 +74,10 @@ segments: 24 sent, 23 received
 
 ```text
 clean path: 50000 bytes end to end in 380.734ms (1050.6 kbit/s), connect 50.032ms, 0 retransmissions
-1% loss:    50000 bytes end to end in 2.738s (146.0 kbit/s), connect 1.050s, 3 retransmissions (1 fast, 2 by timeout)
+1% loss:    50000 bytes end to end in 1.385s (288.6 kbit/s), connect 50.032ms, 1 retransmissions (0 fast, 1 by timeout)
 
-estimator:  70 round trip samples, RTO 2.000s
-smoothed:   51.617ms round trip time
+estimator:  53 round trip samples, RTO 2.000s
+smoothed:   50.839ms round trip time
 ```
 
 这组数字里藏着这个项目最想讲清楚的一件事：**同样一个丢包，出现在不同阶段，代价差二十倍。**
@@ -98,27 +98,37 @@ smoothed:   51.617ms round trip time
 A. small buffers: 10 Mbps, 25 ms one way, 1% loss, 64 KB window, 16-packet queue
    payload 200000 bytes
 
-   none     4509.316s       0.3 kbit/s   107 retransmits  81 timeouts
-   reno        2.678s     597.2 kbit/s     7 retransmits   1 timeouts
+   none     3908.214s       0.4 kbit/s   105 retransmits  70 timeouts
+   reno     662.277ms    2415.9 kbit/s     2 retransmits   0 timeouts
 
 B. long fat path: 100 Mbps, 50 ms one way, 1% loss, 2 MB window, 2000-packet queue
    payload 20000000 bytes
 
-   reno     1296.510s     123.4 kbit/s   367 retransmits  59 timeouts
-   cubic     164.703s     971.4 kbit/s   185 retransmits   5 timeouts
+   reno      214.129s     747.2 kbit/s   425 retransmits  27 timeouts
+   cubic     318.218s     502.7 kbit/s   199 retransmits  12 timeouts
 ```
 
-场景 A 里，不带拥塞控制的发送端把接收端允诺的 64 KB 一次性推进去，而链路队列只能装 16 个报文。队列溢出、丢包；重传又是同样一整批、再次溢出；每次超时还按指数退避翻倍，一路涨到分钟级。200 KB 的数据传了 75 分钟——这就是 1986 年让互联网差点瘫掉的拥塞崩溃，在 200 行代码里复现了一遍。Reno 一开始只发 10 个报文，之后慢慢加速，队列始终没见到装不下的突发。**同一场景、同一种子、同样的丢包率：1683 倍的传输时间差。**
+场景 A 里，不带拥塞控制的发送端把接收端允诺的 64 KB 一次性推进去，而链路队列只能装 16 个报文。队列溢出、丢包；重传又是同样一整批、再次溢出；每次超时还按指数退避翻倍，一路涨到分钟级。200 KB 的数据传了 65 分钟——这就是 1986 年让互联网差点瘫掉的拥塞崩溃，在 200 行代码里复现了一遍。Reno 一开始只发 10 个报文，之后慢慢加速，队列始终没见到装不下的突发。**同一场景、同一种子、同样的丢包率：5901 倍的传输时间差。**
 
 场景 B 是另一种问题。这条路径的带宽延迟积是 1.25 MB，链路每秒丢 1% 的包，两个算法都被丢包限制住了——这时的差别不在于谁更快发现丢包，而在于**丢了之后丢掉多少**。
 
-Reno 每次丢包把窗口砍一半，然后用一个往返一个报文的速度往回爬；更糟的是，当丢包严重到触发超时时，窗口直接回到单个报文。整个传输里它超时了 59 次，窗口长期停在几百字节的量级。
+Reno 每次丢包把窗口砍一半，然后用一个往返一个报文的速度往回爬。CUBIC 只丢掉 30%，沿着三次曲线往回爬：刚丢包时曲线很陡（那段窗口路径已经证明过），接近丢包前的窗口时变平（再往上就是没有根据的试探）。
 
-CUBIC 只丢掉 30%，并且沿着三次曲线往回爬：刚丢包时曲线很陡（因为这段窗口大小是路径已经证明过的），接近丢包前的窗口时变平（因为再往上就是没有根据的试探）。它的超时次数是 5 次，最终快了 **7.9 倍**。
+**上面这张单次运行的表差点又骗了我一次。** 它显示 CUBIC 更慢。加上 `--seeds 3` 之后：
 
-这张对比图是这个项目最有说服力的产出：同样的路径、同样的丢包率、同样的代码路径，只换了窗口怎么随丢包变化，差出一个数量级。
+```text
+algorithm  mean      fastest   slowest    throughput  retransmits  timeouts
+reno       706.083s  214.129s  1312.194s       226.6         1177       112
+cubic      218.618s  166.922s   318.218s       731.8          591        23
+```
 
-需要说明的是，**拥塞控制的价值不能只看单条连接的吞吐**。真正要回答的问题是多条连接共用一条链路时会发生什么，那需要多流场景和受控丢包，是后面的事。单流场景下 Reno 就是比不限速慢，这才是它需要被证明的地方。
+**均值下 CUBIC 快 3.2 倍，超时次数是五分之一。** 单次运行得到的是相反的结论，因为丢包场景下的总时间由少数几次超时主导，而超时按指数退避封顶到 60 秒——Reno 那 112 次超时里有几次直接吃掉了十几分钟。Reno 的最快一次（214 秒）甚至和 CUBIC 的均值相当。
+
+这一轮真正学到的东西不是"CUBIC 更快"，而是：**在丢包场景里，一次运行不是一个测量。**
+
+而这条发现之所以能出现，是因为先修了另一个问题：同一种子只保证同样的随机源，不保证同样的丢包位置。链路原来按发送顺序抽签，两个算法发送顺序不同，遇到的根本是两串丢包；现在丢包跟着**包的身份**走，两行遇到同一串丢失的数据，比较才第一次成为受控实验。在受控之前，同一次对比显示 CUBIC 快 7.9 倍——那个数字也是不可信的，只是碰巧方向"好看"。
+
+一个可复现实验平台的价值不在于它产出漂亮的对比图，而在于它有能力推翻自己上一版的说法。这一轮它推翻了两版：先是那个 7.9 倍，然后是这张单次运行的表。
 
 ## 实验是文件，不是代码
 
@@ -157,17 +167,26 @@ moon run cmd/moonnet -- compare scenarios/long-fat.json --cc reno,cubic
 ```
 
 ```text
-scenario:   long fat path (seed 9, 20000000 bytes)
+scenario:   long fat path (seed 9, 20000000 bytes, 1 run each)
 
-algorithm  elapsed    throughput  retransmits  fast  timeouts  final cwnd
-reno       1296.510s       123.4          367   308        59        2000
-cubic       164.703s       971.4          185   180         5       15000
+algorithm  mean        fastest     slowest     throughput  retransmits  timeouts
+reno       214.129s    214.129s    214.129s         747.2          425        27
+cubic      318.218s    318.218s    318.218s         502.7          199        12
 
-note:       each row draws its own losses, because a link decides per
-            transmission and the algorithms transmit in different orders.
+note:       loss follows packet identity, so every row meets the same lost
+            packets on a given seed. Acknowledgments carry no identity and
+            fall back to transmission order, so their losses still differ.
+            In a lossy scenario a few sixty-second timeouts dominate the
+            total; more than one run is what makes the mean meaningful.
 ```
 
-最后那两行不是客套话。同一种子保证的是**同样的随机源**，不是**同样的丢包位置**——链路按每次发送抽签，而两个算法发送的顺序不同。所以这张表比较的是"同样的条件下两种行为"，不是"同一串丢包下两种应对"。要做到后者，丢包必须成为数据本身的属性（按序号哈希）而不是发送顺序的属性，那是一个更大的改动，列在路线图里。
+那几行 note 不是客套话。**丢包现在跟着包的身份走**：同一个包在同一个链路上永远遇到同样的命运，所以两行遇到的是同一串丢失的数据——这正是"受控实验"的意思。ACK 没有稳定身份（同一个 ACK 会重复发送），仍然按传输顺序抽签，这一条留在注释里而不是被藏起来。
+
+最后一句是这一轮最实用的发现：丢包场景下总时间由少数几次超时主导，而超时按指数退避封顶到 60 秒。同一个场景换一个种子，总时间可以从 214 秒跳到 1162 秒。所以**单次运行不是一个测量**，从这一版起 `compare` 和 `sweep` 都支持 `--seeds N`，报告输出均值与最快/最慢：
+
+```bash
+moon run cmd/moonnet -- compare scenarios/long-fat.json --cc reno,cubic --seeds 4
+```
 
 扫描一个参数：
 

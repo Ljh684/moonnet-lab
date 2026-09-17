@@ -129,11 +129,11 @@ fn compare_scenarios(args : Array[String]) -> Unit {
     Some(value) => value
     None => return
   }
-  let results = @lab.compare(scenario, options.algorithms)
+  let results = @lab.compare(scenario, options.algorithms, seeds=options.seeds)
   if options.as_json {
-    println(@lab.compare_json(scenario, results))
+    println(@lab.compare_json(scenario, results, seeds=options.seeds))
   } else {
-    println(@lab.compare_lines(scenario, results))
+    println(@lab.compare_lines(scenario, results, seeds=options.seeds))
   }
 }
 
@@ -167,9 +167,18 @@ fn sweep_scenarios(args : Array[String]) -> Unit {
     options.to,
     options.steps,
     options.algorithms,
+    seeds=options.seeds,
   )
   if options.as_json {
-    println(@lab.sweep_json(scenario, field, rows, options.algorithms))
+    println(
+      @lab.sweep_json(
+        scenario,
+        field,
+        rows,
+        options.algorithms,
+        seeds=options.seeds,
+      ),
+    )
   } else {
     println(@lab.sweep_lines(scenario, field, rows, options.algorithms))
   }
@@ -184,6 +193,7 @@ struct CommonOptions {
   from : Double
   to : Double
   steps : Int
+  seeds : Int
   as_json : Bool
 }
 
@@ -209,6 +219,7 @@ fn parse_common(
   let mut from = 0.0
   let mut to = 0.01
   let mut steps = 5
+  let mut seeds = 1
   let mut as_json = false
   let mut index = 3
   while index < args.length() {
@@ -256,12 +267,30 @@ fn parse_common(
     } else if option == "--json" {
       as_json = true
       index = index + 1
+    } else if option == "--seeds" && has_value {
+      seeds = match parse_number(args[index + 1]) {
+        Ok(value) => value.to_int()
+        Err(message) => {
+          println(message)
+          return Err(message)
+        }
+      }
+      index = index + 2
     } else {
       println("unknown option: " + option)
       return Err(option)
     }
   }
-  Ok({ scenario: Some(scenario), algorithms, field, from, to, steps, as_json, })
+  Ok({
+    scenario: Some(scenario),
+    algorithms,
+    field,
+    from,
+    to,
+    steps,
+    seeds,
+    as_json,
+  })
 }
 
 ///|
@@ -450,27 +479,32 @@ fn congestion_control_demo() -> Unit {
   print_rows(long_path, long_fat.payload_bytes)
   println("")
   println(
-    "   The bandwidth-delay product is 1.25 MB, so every loss costs a lot",
+    "   Loss here follows packet identity, so both rows meet the same lost data",
   )
   println(
-    "   of window. Reno halves on every loss and then grows by one segment",
-  )
-  println("   per round trip, so on a path that keeps losing packets it spends")
-  println(
-    "   most of its time climbing back from a small window — and when a",
+    "   on this seed. The interesting column is the retransmission count: CUBIC",
   )
   println(
-    "   loss is bad enough to time out, it restarts from a single segment.",
-  )
-  println("")
-  println(
-    "   CUBIC keeps 70% of the window and climbs back along a cubic curve:",
+    "   sends half as many copies of the same bytes, because keeping 70% of the",
   )
   println(
-    "   steeply at first, because it has already proved the path can carry",
+    "   window leaves fewer holes to fill. It is the slower row here, and that is",
   )
-  println("   that traffic, then flattening as it approaches the window it had")
-  println("   before the loss.")
+  println(
+    "   worth stating plainly: CUBIC's additive factor is chosen so that its",
+  )
+  println(
+    "   average window matches Reno's at the same loss rate, so an advantage in",
+  )
+  println(
+    "   throughput was never the promise. A window several times larger that",
+  )
+  println(
+    "   nevertheless finishes later means something is stalling the connection;",
+  )
+  println(
+    "   docs/roadmap.md records it as an open question rather than a result.",
+  )
 }
 
 ///|
@@ -646,7 +680,10 @@ fn run_transfer(
 /// packet that goes missing costs a full second, because a connection is
 /// required to assume the worst until it has measured the path.
 fn lossy_demo() -> Unit {
-  let seed = 9UL
+  // This seed is one where the loss pattern actually lands on the transfer:
+  // loss follows packet identity now, so most seeds leave fifty small segments
+  // untouched.
+  let seed = 6UL
   let payload_bytes = 50_000
   let one_way = @sim.Time::from_ms(25L)
   let up = @net.LinkSpec::new(
@@ -708,14 +745,18 @@ fn lossy_demo() -> Unit {
     " by timeout)",
   )
   println("")
-  println(
-    "            " +
-    lossy.timeouts.to_string() +
-    " timer" +
-    (if lossy.timeouts == 1 { "" } else { "s" }) +
-    " expired: a handshake packet has no successors, so no duplicate",
-  )
-  println("            acknowledgments can reveal the hole")
+  if lossy.timeouts > 0 {
+    println(
+      "            " +
+      lossy.timeouts.to_string() +
+      " timer" +
+      (if lossy.timeouts == 1 { "" } else { "s" }) +
+      " expired: the lost packet had no successors to produce",
+    )
+    println(
+      "            duplicate acknowledgments, so only the timer could help",
+    )
+  }
   println("")
   println(
     "estimator:  " +
@@ -766,7 +807,10 @@ fn demo() -> Unit {
   )
   let mut index = 0
   while index < 3 {
-    link.send(sim, @net.Packet::new(index, 0, @net.Data, 1500, ())) |> ignore
+    // No tag: this demo has no notion of packet identity, so the link decides
+    // loss from its own stream.
+    link.send(sim, @net.Packet::new(index, 0, @net.Data, 1500, 0UL, ()))
+    |> ignore
     sim.run_for(@sim.Time::from_us(200L))
     index = index + 1
   }

@@ -104,6 +104,29 @@ pub fn run(scenario : Scenario) -> RunReport {
 }
 
 ///|
+/// The summary as a document, with the same fixed field order as a single run.
+pub fn RunSummary::to_json_text(self : RunSummary) -> String {
+  @json.object_of_texts([
+    ("algorithm", @json.quote(self.algorithm)),
+    ("runs", self.runs.to_string()),
+    (
+      "mean_elapsed_ms",
+      @json.Json::Number(self.mean_elapsed.to_ms_f()).render(),
+    ),
+    ("min_elapsed_ms", @json.Json::Number(self.min_elapsed.to_ms_f()).render()),
+    ("max_elapsed_ms", @json.Json::Number(self.max_elapsed.to_ms_f()).render()),
+    (
+      "mean_throughput_kbps",
+      @json.Json::Number(self.mean_throughput_kbps).render(),
+    ),
+    ("retransmits", self.retransmits.to_string()),
+    ("fast_retransmits", self.fast_retransmits.to_string()),
+    ("timeouts", self.timeouts.to_string()),
+    ("delivered_bytes", self.delivered_bytes.to_string()),
+  ])
+}
+
+///|
 /// The report as a document with a fixed field order, so that two runs of the
 /// same scenario produce byte-identical output.
 pub fn RunReport::to_json_text(self : RunReport) -> String {

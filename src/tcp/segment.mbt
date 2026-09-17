@@ -135,6 +135,18 @@ pub(all) struct Segment {
   window : Int
   flags : Flags
   payload : Bytes
+  /// The identity of this segment for the purpose of loss.
+  ///
+  /// It is derived from what the segment is — its starting sequence number and
+  /// how many times that segment has been sent — rather than from when it was
+  /// sent. A link that has decided to lose a packet identity would lose every
+  /// repetition of it, so the transmission count has to be part of the
+  /// identity; without it a lost segment could never be recovered.
+  ///
+  /// Zero means "no identity", which is what acknowledgments carry: the same
+  /// acknowledgment is sent many times over, so it has no stable identity and
+  /// the link falls back to its own stream.
+  tag : UInt64
 } derive(Debug)
 
 ///|
@@ -144,8 +156,9 @@ pub fn Segment::new(
   window : Int,
   flags : Flags,
   payload : Bytes,
+  tag : UInt64,
 ) -> Segment {
-  { seq, ack, window, flags, payload, }
+  { seq, ack, window, flags, payload, tag, }
 }
 
 ///|

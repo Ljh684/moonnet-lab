@@ -86,9 +86,10 @@ pub(all) struct Segment {
   window : Int
   flags : Flags
   payload : Bytes
+  tag : UInt64
 } derive(@debug.Debug)
 pub fn Segment::label(Self) -> String
-pub fn Segment::new(Seq, Seq, Int, Flags, Bytes) -> Self
+pub fn Segment::new(Seq, Seq, Int, Flags, Bytes, UInt64) -> Self
 pub fn Segment::payload_length(Self) -> Int
 pub fn Segment::wire_size(Self) -> Int
 

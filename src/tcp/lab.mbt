@@ -73,6 +73,7 @@ fn LinkPair::build(
       0,
       @net.Data,
       segment.wire_size(),
+      segment.tag,
       segment,
     )
     up.send(sim, packet) |> ignore
@@ -84,6 +85,7 @@ fn LinkPair::build(
       0,
       @net.Data,
       segment.wire_size(),
+      segment.tag,
       segment,
     )
     down.send(sim, packet) |> ignore

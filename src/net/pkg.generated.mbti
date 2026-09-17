@@ -29,6 +29,7 @@ pub impl Show for Admission
 pub(all) struct Link[T] {
   spec : LinkSpec
   rng : @sim.Rng
+  loss_key : UInt64
   queue : PacketQueue[T]
   deliver : (Packet[T]) -> Unit
   mut busy_until : @sim.Time
@@ -41,7 +42,7 @@ pub(all) struct Link[T] {
 pub fn[T] Link::busy_time(Self[T]) -> @sim.Time
 pub fn[T] Link::bytes_sent(Self[T]) -> Int64
 pub fn[T] Link::draw_jitter(Self[T], @sim.Sim) -> @sim.Time
-pub fn[T] Link::draw_loss(Self[T], @sim.Sim) -> Bool
+pub fn[T] Link::draw_loss(Self[T], @sim.Sim, UInt64) -> Bool
 pub fn[T] Link::dropped(Self[T]) -> Int
 pub fn[T] Link::lost(Self[T]) -> Int
 pub fn[T] Link::name(Self[T]) -> String
@@ -69,10 +70,11 @@ pub(all) struct Packet[T] {
   flow : Int
   kind : PacketKind
   size : Int
+  tag : UInt64
   payload : T
 }
 pub fn[T] Packet::label(Self[T]) -> String
-pub fn[T] Packet::new(Int, Int, PacketKind, Int, T) -> Self[T]
+pub fn[T] Packet::new(Int, Int, PacketKind, Int, UInt64, T) -> Self[T]
 
 pub(all) enum PacketKind {
   Data

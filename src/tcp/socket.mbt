@@ -113,6 +113,10 @@ struct InFlight {
   /// about the round-trip time, because the acknowledgment does not say which
   /// copy it is acknowledging.
   retransmitted : Bool
+  /// How many times this segment has been sent, including the first. It is part
+  /// of the segment's identity for loss, so that a retransmission is judged
+  /// afresh instead of inheriting the fate of the transmission it repeats.
+  transmissions : Int
 }
 
 ///|
@@ -719,17 +723,20 @@ fn TcpConnection::retransmit_oldest(
     return
   }
   let entry = self.inflight[self.inflight_head]
+  let transmissions = entry.transmissions + 1
   let segment = Segment::new(
     entry.seq,
     self.rcv_nxt,
     self.advertised_window(),
     entry.flags,
     entry.payload,
+    @sim.mix64(entry.seq.value.to_uint64(), transmissions.to_uint64()),
   )
   self.inflight[self.inflight_head] = {
     ..entry,
     sent_at: sim.now(),
     retransmitted: true,
+    transmissions,
   }
   self.retransmits = self.retransmits + 1
   self.segments_sent = self.segments_sent + 1
@@ -807,6 +814,7 @@ fn TcpConnection::send_data(
     self.advertised_window(),
     flags,
     payload,
+    @sim.mix64(self.snd_nxt.value.to_uint64(), 1UL),
   )
   self.inflight.push({
     seq: self.snd_nxt,
@@ -815,6 +823,7 @@ fn TcpConnection::send_data(
     sequence_length: flags.sequence_length(payload.length()),
     sent_at: sim.now(),
     retransmitted: false,
+    transmissions: 1,
   })
   self.snd_nxt = self.snd_nxt.advance(payload.length())
   self.bytes_sent = self.bytes_sent + payload.length()
@@ -842,6 +851,7 @@ fn TcpConnection::send_control(
     self.advertised_window(),
     flags,
     Bytes::new(0),
+    @sim.mix64(seq.value.to_uint64(), 1UL),
   )
   self.inflight.push({
     seq,
@@ -850,6 +860,7 @@ fn TcpConnection::send_control(
     sequence_length,
     sent_at: sim.now(),
     retransmitted: false,
+    transmissions: 1,
   })
   self.snd_nxt = self.snd_nxt.advance(sequence_length)
   if flags.fin {
@@ -876,6 +887,9 @@ fn TcpConnection::emit_ack(self : TcpConnection, sim : @sim.Sim) -> Unit {
     self.advertised_window(),
     Flags::ack(),
     Bytes::new(0),
+    // Acknowledgments carry no identity: the same acknowledgment is sent again
+    // and again, so the link judges them by transmission order instead.
+    0UL,
   )
   self.segments_sent = self.segments_sent + 1
   if sim.is_recording() {

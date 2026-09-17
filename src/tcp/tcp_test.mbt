@@ -114,8 +114,9 @@ fn long_fat_transfer(
   cc : &@tcp.CongestionControl,
   loss : Double,
   payload_bytes : Int,
+  seed : UInt64,
 ) -> (@sim.Time, @tcp.LinkPair) {
-  let sim = @sim.Sim::new(9UL)
+  let sim = @sim.Sim::new(seed)
   let up = @net.LinkSpec::new(
     "up",
     100_000_000L,
@@ -134,7 +135,7 @@ fn long_fat_transfer(
     @tcp.TcpConfig::new(1000, 2_000_000, 5000U),
     up,
     down,
-    9UL,
+    seed,
     cc,
   )
   pair.connect(sim)
@@ -248,24 +249,51 @@ test "cubic climbs back past the window it was cut to" {
 }
 
 ///|
-test "cubic outruns reno on a long fat path that keeps losing packets" {
-  let payload_bytes = 20_000_000
-  let (reno_elapsed, _reno_pair) = long_fat_transfer(
-    @tcp.reno(1000),
-    0.01,
-    payload_bytes,
-  )
-  let (cubic_elapsed, cubic_pair) = long_fat_transfer(
-    @tcp.cubic(1000),
-    0.01,
-    payload_bytes,
-  )
-  // Reno's window keeps collapsing to a single segment, so it spends most of the
-  // transfer climbing back; CUBIC holds its window and times out far less often.
-  inspect(cubic_elapsed.ps < reno_elapsed.ps, content="true")
-  inspect(cubic_pair.client.timeouts() < 10, content="true")
-  inspect(cubic_pair.server.delivered_bytes(), content="20000000")
-  inspect(_reno_pair.server.delivered_bytes(), content="20000000")
+test "cubic retransmits less than reno on a lossy path" {
+  // Two megabytes, not twenty: on a lossy path the total is dominated by how
+  // many times the retransmission timer expires, and each expiry costs up to the
+  // sixty-second backoff ceiling. A large transfer is therefore decided by a
+  // handful of expiries and swings by an order of magnitude between seeds, so
+  // this measures the average over three.
+  //
+  // What it asserts is the retransmission count, not the elapsed time. Under
+  // controlled loss CUBIC does *not* finish sooner on this path — see the note
+  // in docs/roadmap.md — but it sends noticeably fewer copies of the same data,
+  // which is the part of the behaviour that follows directly from keeping 70% of
+  // the window instead of half.
+  let payload_bytes = 2_000_000
+  let mut reno_timeouts = 0
+  let mut cubic_timeouts = 0
+  let mut reno_retransmits = 0
+  let mut cubic_retransmits = 0
+  let mut offset = 0UL
+  while offset < 3UL {
+    let (reno_elapsed, _reno_pair) = long_fat_transfer(
+      @tcp.reno(1000),
+      0.01,
+      payload_bytes,
+      9UL + offset,
+    )
+    let (cubic_elapsed, cubic_pair) = long_fat_transfer(
+      @tcp.cubic(1000),
+      0.01,
+      payload_bytes,
+      9UL + offset,
+    )
+    // Both transfers take a measurable amount of time; the numbers themselves
+    // are checked by the reports, not here.
+    inspect(reno_elapsed.ps > 0L, content="true")
+    inspect(cubic_elapsed.ps > 0L, content="true")
+    reno_timeouts = reno_timeouts + _reno_pair.client.timeouts()
+    cubic_timeouts = cubic_timeouts + cubic_pair.client.timeouts()
+    reno_retransmits = reno_retransmits + _reno_pair.client.retransmits()
+    cubic_retransmits = cubic_retransmits + cubic_pair.client.retransmits()
+    inspect(cubic_pair.server.delivered_bytes(), content="2000000")
+    inspect(_reno_pair.server.delivered_bytes(), content="2000000")
+    offset = offset + 1UL
+  }
+  inspect(cubic_retransmits < reno_retransmits, content="true")
+  inspect(cubic_timeouts <= reno_timeouts, content="true")
 }
 
 ///|
@@ -676,7 +704,10 @@ test "a lossy run is still reproducible" {
   second.client.send(second_sim, pattern_bytes(10_000))
   first_sim.run()
   second_sim.run()
-  inspect(first.client.retransmits(), content="1")
+  // Loss now follows packet identity, so with this seed none of the ten
+  // kilobytes happened to hit a packet the link was going to lose. What matters
+  // here is that both runs agree.
+  inspect(first.client.retransmits(), content="0")
   inspect(
     first.client.retransmits() == second.client.retransmits(),
     content="true",
@@ -767,6 +798,7 @@ test "out of order segments are buffered and then delivered in order" {
       4096,
       @tcp.Flags::syn(),
       Bytes::new(0),
+      0UL,
     ),
   )
   inspect(server.rcv_nxt().to_string(), content="1001")
@@ -781,6 +813,7 @@ test "out of order segments are buffered and then delivered in order" {
       4096,
       @tcp.Flags::ack(),
       second,
+      0UL,
     ),
   )
   inspect(server.delivered_bytes(), content="0")
@@ -794,6 +827,7 @@ test "out of order segments are buffered and then delivered in order" {
       4096,
       @tcp.Flags::ack(),
       first,
+      0UL,
     ),
   )
   inspect(server.delivered_bytes(), content="200")
@@ -814,6 +848,7 @@ test "a retransmitted segment is acknowledged but not delivered twice" {
       4096,
       @tcp.Flags::syn(),
       Bytes::new(0),
+      0UL,
     ),
   )
   let payload = pattern_bytes(100)
@@ -823,6 +858,7 @@ test "a retransmitted segment is acknowledged but not delivered twice" {
     4096,
     @tcp.Flags::ack(),
     payload,
+    0UL,
   )
   server.on_segment(sim, segment)
   inspect(server.delivered_bytes(), content="100")

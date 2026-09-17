@@ -13,11 +13,11 @@ pub fn algorithm_of(String, Int) -> &@tcp.CongestionControl
 
 pub fn algorithms_of(String) -> Result[Array[String], String]
 
-pub fn compare(Scenario, Array[String]) -> Array[(String, RunReport)]
+pub fn compare(Scenario, Array[String], seeds? : Int) -> Array[(String, RunSummary)]
 
-pub fn compare_json(Scenario, Array[(String, RunReport)]) -> String
+pub fn compare_json(Scenario, Array[(String, RunSummary)], seeds? : Int) -> String
 
-pub fn compare_lines(Scenario, Array[(String, RunReport)]) -> String
+pub fn compare_lines(Scenario, Array[(String, RunSummary)], seeds? : Int) -> String
 
 pub fn format_fixed(Double, Int) -> String
 
@@ -27,9 +27,11 @@ pub fn render_table(Array[String], Array[Array[String]]) -> String
 
 pub fn run(Scenario) -> RunReport
 
-pub fn sweep(Scenario, SweepField, Double, Double, Int, Array[String]) -> Array[SweepRow]
+pub fn summarise(Scenario, String, Int) -> RunSummary
 
-pub fn sweep_json(Scenario, SweepField, Array[SweepRow], Array[String]) -> String
+pub fn sweep(Scenario, SweepField, Double, Double, Int, Array[String], seeds? : Int) -> Array[SweepRow]
+
+pub fn sweep_json(Scenario, SweepField, Array[SweepRow], Array[String], seeds? : Int) -> String
 
 pub fn sweep_lines(Scenario, SweepField, Array[SweepRow], Array[String]) -> String
 
@@ -74,6 +76,20 @@ pub fn RunReport::throughput_kbps(Self) -> Double
 pub fn RunReport::to_json_text(Self) -> String
 pub fn RunReport::to_lines(Self) -> String
 
+pub(all) struct RunSummary {
+  algorithm : String
+  runs : Int
+  mean_elapsed : @sim.Time
+  min_elapsed : @sim.Time
+  max_elapsed : @sim.Time
+  mean_throughput_kbps : Double
+  retransmits : Int
+  fast_retransmits : Int
+  timeouts : Int
+  delivered_bytes : Int
+} derive(Eq, @debug.Debug)
+pub fn RunSummary::to_json_text(Self) -> String
+
 pub(all) struct Scenario {
   name : String
   seed : UInt64
@@ -98,7 +114,7 @@ pub fn SweepField::render(Self) -> String
 
 pub(all) struct SweepRow {
   value : Double
-  results : Array[(String, RunReport)]
+  results : Array[(String, RunSummary)]
 }
 
 // Type aliases

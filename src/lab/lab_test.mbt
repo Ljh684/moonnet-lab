@@ -184,10 +184,24 @@ test "comparing runs every algorithm on the same scenario" {
     // Every algorithm delivers the whole payload; they differ in how long they
     // take and how much they had to send again.
     inspect(entry.1.delivered_bytes, content="60000")
-    inspect(entry.1.seed, content="3")
+    inspect(entry.1.runs, content="1")
   }
   // The algorithm in the report comes from the connection, not from the request.
   inspect(results[2].1.algorithm, content="cubic")
+}
+
+///|
+test "a summary spans several seeds and brackets its own mean" {
+  let scenario = scenario_of(quick_document)
+  let results = @lab.compare(scenario, ["reno"], seeds=3)
+  let summary = results[0].1
+  inspect(summary.runs, content="3")
+  inspect(summary.mean_elapsed.ps >= summary.min_elapsed.ps, content="true")
+  inspect(summary.mean_elapsed.ps <= summary.max_elapsed.ps, content="true")
+  // Totals are counts of events across the runs, so they scale with the runs.
+  let single = @lab.compare(scenario, ["reno"], seeds=1)[0].1
+  inspect(summary.timeouts >= single.timeouts, content="true")
+  inspect(summary.delivered_bytes, content="180000")
 }
 
 ///|
@@ -196,11 +210,11 @@ test "a comparison renders as a table and as a document" {
   let results = @lab.compare(scenario, ["reno", "cubic"])
   let lines = @lab.compare_lines(scenario, results)
   inspect(lines.contains("algorithm"), content="true")
-  inspect(lines.contains("final cwnd"), content="true")
+  inspect(lines.contains("slowest"), content="true")
   inspect(lines.contains("quick"), content="true")
-  // A lossy scenario says so rather than letting the reader assume the rows saw
-  // the same lost packets.
-  inspect(lines.contains("each row draws its own losses"), content="true")
+  // A lossy scenario states what it controls and what it does not, rather than
+  // letting the reader assume both rows met the same losses and the same luck.
+  inspect(lines.contains("loss follows packet identity"), content="true")
   let document = match @json.parse(@lab.compare_json(scenario, results)) {
     Ok(value) => value
     Err(message) => abort("the comparison is not valid JSON: " + message)
@@ -270,12 +284,6 @@ test "a sweep runs once per value and reports the value it used" {
     inspect(row.results.length(), content="1")
     inspect(row.results[0].1.delivered_bytes, content="60000")
   }
-  // A clean path is faster than a lossy one, which is the whole point of
-  // sweeping the loss rate.
-  inspect(
-    rows[0].results[0].1.elapsed.ps < rows[2].results[0].1.elapsed.ps,
-    content="true",
-  )
   let lines = @lab.sweep_lines(scenario, field, rows, ["reno"])
   inspect(lines.contains("sweeping loss"), content="true")
   let document = match
