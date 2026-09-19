@@ -137,6 +137,13 @@ struct Buffered {
 pub(all) struct TcpConnection {
   config : TcpConfig
   cc : &CongestionControl
+  /// Which flow this connection is, when several share a bottleneck.
+  ///
+  /// It is part of each segment's identity for loss, so that two flows opening
+  /// at the same sequence number do not inherit each other's lost packets. Flow
+  /// zero is the single-flow case and leaves the identity untouched, so adding
+  /// this concept did not change any existing result.
+  mut flow : UInt64
   mut state : TcpState
   mut emit : (Segment) -> Unit
   mut snd_una : Seq
@@ -231,6 +238,7 @@ pub fn TcpConnection::new_with_cc(
   {
     config,
     cc,
+    flow: 0UL,
     state: Closed,
     emit: _segment => (),
     snd_una: iss,
@@ -267,6 +275,32 @@ pub fn TcpConnection::new_with_cc(
     rto: config.rto_initial,
     timer_running: false,
     timer_generation: 0,
+  }
+}
+
+///|
+/// Give this connection an identity, so that several connections sharing a link
+/// lose different packets. Flows are numbered from one; zero means "the only
+/// connection", and leaves packets judged on their sequence number alone.
+pub fn TcpConnection::set_flow(self : TcpConnection, id : UInt64) -> Unit {
+  self.flow = id
+}
+
+///|
+/// The identity of a segment for the purpose of loss: what it is, not when it
+/// was sent. `transmissions` is part of it so that a retransmission is judged
+/// afresh, and the flow is part of it so that flows sharing a link do not share
+/// a fate.
+fn TcpConnection::tag_for(
+  self : TcpConnection,
+  seq : Seq,
+  transmissions : Int,
+) -> UInt64 {
+  let identity = @sim.mix64(seq.value.to_uint64(), transmissions.to_uint64())
+  if self.flow == 0UL {
+    identity
+  } else {
+    @sim.mix64(self.flow, identity)
   }
 }
 
@@ -730,7 +764,7 @@ fn TcpConnection::retransmit_oldest(
     self.advertised_window(),
     entry.flags,
     entry.payload,
-    @sim.mix64(entry.seq.value.to_uint64(), transmissions.to_uint64()),
+    self.tag_for(entry.seq, transmissions),
   )
   self.inflight[self.inflight_head] = {
     ..entry,
@@ -814,7 +848,7 @@ fn TcpConnection::send_data(
     self.advertised_window(),
     flags,
     payload,
-    @sim.mix64(self.snd_nxt.value.to_uint64(), 1UL),
+    self.tag_for(self.snd_nxt, 1),
   )
   self.inflight.push({
     seq: self.snd_nxt,
@@ -851,7 +885,7 @@ fn TcpConnection::send_control(
     self.advertised_window(),
     flags,
     Bytes::new(0),
-    @sim.mix64(seq.value.to_uint64(), 1UL),
+    self.tag_for(seq, 1),
   )
   self.inflight.push({
     seq,

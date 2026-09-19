@@ -119,6 +119,7 @@ pub fn TcpConfig::with_rto(Self, @sim.Time, @sim.Time, @sim.Time) -> Self
 pub(all) struct TcpConnection {
   config : TcpConfig
   cc : &CongestionControl
+  mut flow : UInt64
   mut state : TcpState
   mut emit : (Segment) -> Unit
   mut snd_una : Seq
@@ -183,6 +184,7 @@ pub fn TcpConnection::segments_received(Self) -> Int
 pub fn TcpConnection::segments_sent(Self) -> Int
 pub fn TcpConnection::send(Self, @sim.Sim, Bytes) -> Unit
 pub fn TcpConnection::set_emit(Self, (Segment) -> Unit) -> Unit
+pub fn TcpConnection::set_flow(Self, UInt64) -> Unit
 pub fn TcpConnection::snd_nxt(Self) -> Seq
 pub fn TcpConnection::snd_una(Self) -> Seq
 pub fn TcpConnection::srtt(Self) -> @sim.Time?

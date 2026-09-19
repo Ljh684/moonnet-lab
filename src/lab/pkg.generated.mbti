@@ -21,11 +21,15 @@ pub fn compare_lines(Scenario, Array[(String, RunSummary)], seeds? : Int) -> Str
 
 pub fn format_fixed(Double, Int) -> String
 
+pub fn jain_index(Array[Double]) -> Double
+
 pub fn known_algorithm(String) -> Result[Unit, String]
 
 pub fn render_table(Array[String], Array[Array[String]]) -> String
 
 pub fn run(Scenario) -> RunReport
+
+pub fn run_fairness(Scenario) -> FairnessReport
 
 pub fn summarise(Scenario, String, Int) -> RunSummary
 
@@ -44,6 +48,36 @@ pub(all) struct ConnectionProfile {
   mss : Int
   receive_window : Int
   initial_seq : UInt
+} derive(Eq, @debug.Debug)
+
+pub(all) struct FairnessReport {
+  scenario : String
+  seed : UInt64
+  flows : Array[FlowResult]
+  jain_index : Double
+  total_delivered_bytes : Int
+  window : @sim.Time
+  saturated : Bool
+  window_closed : Bool
+  uplink_dropped : Int
+  uplink_lost : Int
+} derive(Eq, @debug.Debug)
+pub fn FairnessReport::to_json_text(Self) -> String
+pub fn FairnessReport::to_lines(Self) -> String
+
+pub(all) struct FlowProfile {
+  algorithm : String
+  count : Int
+} derive(Eq, @debug.Debug)
+
+pub(all) struct FlowResult {
+  index : Int
+  algorithm : String
+  delivered_bytes : Int
+  throughput_kbps : Double
+  finished : Bool
+  retransmits : Int
+  timeouts : Int
 } derive(Eq, @debug.Debug)
 
 pub(all) struct LinkProfile {
@@ -99,7 +133,10 @@ pub(all) struct Scenario {
   downlink : LinkProfile
   client : ConnectionProfile
   server : ConnectionProfile
+  duration : @sim.Time
+  flows : Array[FlowProfile]
 } derive(Eq, @debug.Debug)
+pub fn Scenario::flow_algorithms(Self) -> Array[String]
 pub fn Scenario::from_json(@json.Json) -> Result[Self, String]
 
 pub(all) enum SweepField {

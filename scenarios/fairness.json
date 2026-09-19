@@ -1,0 +1,25 @@
+{
+  "name": "fairness: two reno against two cubic",
+  "seed": 9,
+  "payload_bytes": 16000000,
+  "duration_ms": 10000,
+  "algorithm": "reno",
+  "uplink": {
+    "bandwidth_bps": 10000000,
+    "delay_ms": 25,
+    "loss": 0.0005,
+    "queue_packets": 64
+  },
+  "client": {
+    "mss": 1000,
+    "receive_window": 32000
+  },
+  "server": {
+    "mss": 1000,
+    "receive_window": 32000
+  },
+  "flows": [
+    { "algorithm": "reno", "count": 2 },
+    { "algorithm": "cubic", "count": 2 }
+  ]
+}

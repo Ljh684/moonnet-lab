@@ -17,6 +17,16 @@ pub(all) struct ConnectionProfile {
 } derive(Eq, Debug)
 
 ///|
+/// One group of flows in a multi-flow scenario.
+///
+/// A fairness experiment is usually "two of these against two of those", so the
+/// scenario names a count and an algorithm rather than listing flows one by one.
+pub(all) struct FlowProfile {
+  algorithm : String
+  count : Int
+} derive(Eq, Debug)
+
+///|
 /// One experiment, expressed as data rather than as code.
 ///
 /// Everything a run depends on is here: the path in both directions, both ends
@@ -32,6 +42,12 @@ pub(all) struct Scenario {
   downlink : LinkProfile
   client : ConnectionProfile
   server : ConnectionProfile
+  /// How long a fairness experiment measures for. Single-flow runs ignore it:
+  /// they stop when the payload has been delivered.
+  duration : @sim.Time
+  /// The flows that share the path. Empty means "one flow, using `algorithm`",
+  /// which is what every single-flow scenario means.
+  flows : Array[FlowProfile]
 } derive(Eq, Debug)
 
 ///|
@@ -90,6 +106,17 @@ pub fn Scenario::from_json(document : @json.Json) -> Result[Scenario, String] {
     Ok(value) => value
     Err(message) => return Err(message)
   }
+  let flows = match flow_profiles(document) {
+    Ok(value) => value
+    Err(message) => return Err(message)
+  }
+  let duration_ms = match number_field(document, "", "duration_ms", 5_000.0) {
+    Ok(value) => value
+    Err(message) => return Err(message)
+  }
+  if duration_ms <= 0.0 {
+    return Err("scenario.duration_ms must be greater than zero")
+  }
   Ok({
     name,
     seed: seed.to_int64().reinterpret_as_uint64(),
@@ -99,7 +126,75 @@ pub fn Scenario::from_json(document : @json.Json) -> Result[Scenario, String] {
     downlink,
     client,
     server,
+    duration: @sim.Time::from_ms_f(duration_ms),
+    flows,
   })
+}
+
+///|
+/// The flows sharing the path, expanded from the groups the scenario lists.
+///
+/// An absent or empty list means one flow, which is what every scenario written
+/// before flows existed means.
+fn flow_profiles(document : @json.Json) -> Result[Array[FlowProfile], String] {
+  let groups = match document.field("flows") {
+    None => return Ok([])
+    Some(value) =>
+      match value.as_list() {
+        Some(items) => items
+        None => return Err("scenario.flows must be a list")
+      }
+  }
+  let flows : Array[FlowProfile] = []
+  let mut index = 0
+  while index < groups.length() {
+    let group = groups[index]
+    let algorithm = match
+      text_field(group, "flows[" + index.to_string() + "]", "algorithm", "") {
+      Ok(value) => value
+      Err(message) => return Err(message)
+    }
+    if algorithm == "" {
+      return Err(
+        "scenario.flows[" + index.to_string() + "].algorithm is required",
+      )
+    }
+    match known_algorithm(algorithm) {
+      Ok(_) => ()
+      Err(message) => return Err(message)
+    }
+    let count = match
+      number_field(group, "flows[" + index.to_string() + "]", "count", 1.0) {
+      Ok(value) => value
+      Err(message) => return Err(message)
+    }
+    if count < 1.0 {
+      return Err(
+        "scenario.flows[" + index.to_string() + "].count must be at least 1",
+      )
+    }
+    let mut added = 0
+    while added < count.to_int() {
+      flows.push({ algorithm, count: 1, })
+      added = added + 1
+    }
+    index = index + 1
+  }
+  Ok(flows)
+}
+
+///|
+/// The algorithms of every flow, expanded: one entry per flow.
+pub fn Scenario::flow_algorithms(self : Scenario) -> Array[String] {
+  let names : Array[String] = []
+  if self.flows.length() == 0 {
+    names.push(self.algorithm)
+    return names
+  }
+  for flow in self.flows {
+    names.push(flow.algorithm)
+  }
+  names
 }
 
 ///|

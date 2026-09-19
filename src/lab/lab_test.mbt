@@ -325,3 +325,126 @@ test "algorithm lists are parsed and checked" {
   inspect(@lab.algorithms_of("reno,nonesuch") is Err(_), content="true")
   inspect(@lab.algorithms_of("") is Err(_), content="true")
 }
+
+///|
+test "jain's index is one when shares are equal and 1/n when one takes all" {
+  inspect(@lab.jain_index([1.0, 1.0, 1.0, 1.0]), content="1")
+  inspect(@lab.jain_index([]), content="0")
+  inspect(@lab.jain_index([0.0, 0.0]), content="0")
+  // One flow taking everything out of four.
+  inspect(@lab.jain_index([4.0, 0.0, 0.0, 0.0]), content="0.25")
+  // Two equal shares and two empty ones.
+  inspect(@lab.jain_index([1.0, 1.0, 0.0, 0.0]), content="0.5")
+}
+
+///|
+/// A small fairness experiment: two flows, a short window, so the test stays
+/// quick while still exercising contention for one queue.
+let fairness_document : String =
+  #|{
+  #|  "name": "probe fairness",
+  #|  "seed": 9,
+  #|  "payload_bytes": 2000000,
+  #|  "duration_ms": 2000,
+  #|  "algorithm": "reno",
+  #|  "uplink": { "bandwidth_bps": 10000000, "delay_ms": 25, "loss": 0.001, "queue_packets": 32 },
+  #|  "client": { "mss": 1000, "receive_window": 32000 },
+  #|  "server": { "mss": 1000, "receive_window": 32000 },
+  #|  "flows": [ { "algorithm": "reno", "count": 1 }, { "algorithm": "cubic", "count": 1 } ]
+  #|}
+
+///|
+test "a scenario expands its flow groups" {
+  let scenario = scenario_of(fairness_document)
+  let names = scenario.flow_algorithms()
+  inspect(names.length(), content="2")
+  inspect(names[0], content="reno")
+  inspect(names[1], content="cubic")
+  inspect(scenario.duration.render(), content="2.000s")
+  // A scenario with no flows list is one flow, using the scenario's algorithm.
+  let single = scenario_of(quick_document)
+  inspect(single.flow_algorithms().length(), content="1")
+  inspect(single.flow_algorithms()[0], content="reno")
+  inspect(single.duration.render(), content="5.000s")
+}
+
+///|
+test "a malformed flow group says which one it disliked" {
+  inspect(
+    scenario_error(
+      "{\"name\": \"x\", \"payload_bytes\": 1, \"uplink\": {\"bandwidth_bps\": 1}, \"flows\": [ { \"count\": 2 } ]}",
+    ),
+    content="scenario.flows[0].algorithm is required",
+  )
+  inspect(
+    scenario_error(
+      "{\"name\": \"x\", \"payload_bytes\": 1, \"uplink\": {\"bandwidth_bps\": 1}, \"flows\": [ { \"algorithm\": \"reno\", \"count\": 0 } ]}",
+    ),
+    content="scenario.flows[0].count must be at least 1",
+  )
+  inspect(
+    scenario_error(
+      "{\"name\": \"x\", \"payload_bytes\": 1, \"uplink\": {\"bandwidth_bps\": 1}, \"flows\": 3}",
+    ),
+    content="scenario.flows must be a list",
+  )
+}
+
+///|
+test "flows sharing a path deliver about what the path can carry" {
+  let scenario = scenario_of(fairness_document)
+  let report = @lab.run_fairness(scenario)
+  inspect(report.flows.length(), content="2")
+  inspect(report.window_closed, content="true")
+  // The measurement stops at the end of the window, so the aggregate has to fit
+  // inside what the link could physically carry in that time. A number above
+  // this line would mean the flows were credited with bytes sent after the
+  // window closed.
+  let capacity = 10_000_000.0 * scenario.duration.to_ms_f() / 1000.0 / 8.0
+  inspect(report.total_delivered_bytes.to_double() <= capacity, content="true")
+  inspect(report.total_delivered_bytes > 0, content="true")
+  inspect(report.jain_index > 0.0, content="true")
+  inspect(report.jain_index <= 1.0, content="true")
+  // Every flow was still offering data at the end, so the shares are a statement
+  // about the path rather than about the offered load.
+  inspect(report.saturated, content="true")
+  for flow in report.flows {
+    inspect(flow.finished, content="false")
+    inspect(flow.delivered_bytes > 0, content="true")
+  }
+}
+
+///|
+test "a fairness run is the same twice" {
+  let scenario = scenario_of(fairness_document)
+  let first = @lab.run_fairness(scenario)
+  let second = @lab.run_fairness(scenario)
+  inspect(first == second, content="true")
+  inspect(first.to_lines() == second.to_lines(), content="true")
+  inspect(first.to_json_text() == second.to_json_text(), content="true")
+}
+
+///|
+test "the fairness report is a document with the fields it promises" {
+  let report = @lab.run_fairness(scenario_of(fairness_document))
+  let document = match @json.parse(report.to_json_text()) {
+    Ok(value) => value
+    Err(message) => abort("the fairness report is not valid JSON: " + message)
+  }
+  inspect(
+    document.field("flows").unwrap().as_list().unwrap().length(),
+    content="2",
+  )
+  inspect(
+    document.field("jain_index").unwrap().as_number().unwrap() > 0.0,
+    content="true",
+  )
+  inspect(
+    document.field("flows").unwrap().as_list().unwrap()[0]
+    .field("algorithm")
+    .unwrap()
+    .as_text()
+    .unwrap(),
+    content="reno",
+  )
+}

@@ -383,11 +383,22 @@ fn run_scenario(args : Array[String]) -> Unit {
   } else {
     { ..scenario, algorithm, }
   }
-  let report = @lab.run(experiment)
-  if as_json {
-    println(report.to_json_text())
+  // A scenario that names several flows is a fairness experiment: the flows
+  // share one path, so the interesting output is per-flow rather than per-run.
+  if experiment.flow_algorithms().length() > 1 {
+    let fairness = @lab.run_fairness(experiment)
+    if as_json {
+      println(fairness.to_json_text())
+    } else {
+      println(fairness.to_lines())
+    }
   } else {
-    println(report.to_lines())
+    let report = @lab.run(experiment)
+    if as_json {
+      println(report.to_json_text())
+    } else {
+      println(report.to_lines())
+    }
   }
 }
 
