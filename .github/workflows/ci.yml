@@ -34,9 +34,6 @@ jobs:
       - name: Run tests
         run: moon test
 
-      - name: Run the demo
-        run: moon run cmd/moonnet -- demo
-
       # Exercises the scenario files end to end: reading them from disk,
       # running one, and comparing algorithms on the same path.
       - name: Run the scenario tools

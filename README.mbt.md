@@ -10,25 +10,28 @@
 
 moonnet-lab 把网络行为建模成纯函数：给定拓扑、流量、参数和随机种子，输出确定的事件序列和指标。于是三件事同时变得可能——对比不同拥塞控制算法、回溯上一次实验为什么得出那个结论、把结论当成回归测试固化下来。
 
+## 给谁用
+
+- **学与教拥塞控制的人**：把公式变成能动手的实验，不需要 Mininet，不需要 root，不需要 Linux。
+- **设计与评估协议和算法的人**：写一个算法就是实现一个 7 方法的接口；库自带 RFC 标准实现作为对照基线，丢包按包身份决定，两行遇到的是同一串丢包。
+- **将来做 MoonBit 网络栈的人**：把它当作回归测试台——MoonBit 目前没有网络协议栈，一旦有人开始写，最先需要的就是能在 `moon test` 里跑的确定性验证环境。
+
 ## 当前状态
 
-内核与网络层已经完成并有测试覆盖；TCP 协议栈与拥塞控制算法按 [路线图](docs/roadmap.md) 推进。
+这是一个 MVP：只做一件事的两端——链路物理与传输协议行为，以及跑实验的最小装置。
 
 | 模块 | 内容 | 状态 |
 | --- | --- | --- |
 | `src/sim` | 虚拟时间、确定性事件队列、可复现随机源 | 完成 |
 | `src/net` | 数据包、有界队列（drop-tail）、链路（带宽/延迟/抖动/丢包） | 完成 |
 | `src/tcp` | 连接状态机、三次握手、序号与累计确认、滑动窗口、乱序重组 | 完成 |
-| `src/tcp` | RTO 估计（RFC 6298）、Karn 算法、超时重传与指数退避 | 完成 |
-| `src/tcp` | 快速重传（三次重复 ACK）、一次窗口内多丢包的部分确认恢复 | 完成 |
-| `src/tcp` | 可插拔拥塞控制接口、Reno（慢启动 / 拥塞避免 / 快速恢复 / 超时崩塌） | 完成 |
-| `src/tcp` | CUBIC（RFC 9438：三次增长曲线、0.7 倍乘性减少、Reno 友好区） | 完成 |
-| `src/tcp` | Vegas（用延迟而不是丢包当作拥塞信号） | 计划中 |
-| `src/aqm` | RED、CoDel 队列管理 | 计划中 |
+| `src/tcp` | RTO 估计（RFC 6298）、Karn 算法、超时重传与指数退避、快速重传与多丢包恢复 | 完成 |
+| `src/tcp` | 可插拔拥塞控制接口、Reno（RFC 5681/6928）、CUBIC（RFC 9438） | 完成 |
 | `src/json` | 零依赖的 JSON 读写，供场景文件与报告使用 | 完成 |
-| `src/lab` | 实验即数据：场景文件、运行、指标报告 | 完成 |
-| `src/lab` | `compare` 与 `sweep` 子命令 | 完成 |
-| `src/lab` | SVG 图表、多流场景、受控丢包（按序号而不是按发送顺序） | 下一步 |
+| `src/lab` | 场景文件、运行、指标报告、对比与扫描、多流公平性 | 完成 |
+| `cmd/moonnet` | 五个子命令：`run` / `compare` / `sweep` / `list` / `version` | 完成 |
+
+**明确不做**：通用仿真框架（用 [moonsim](https://mooncakes.io/docs/zlhahaha/moonsim)）、pcap 解析（已有实现）、与真实网络互操作（用 Mininet）、大规模并发、图形界面。理由写在下面的"与生态中已有工作的关系"。
 
 ## 快速开始
 
@@ -36,51 +39,16 @@ moonnet-lab 把网络行为建模成纯函数：给定拓扑、流量、参数�
 
 ```bash
 moon test                        # 运行全部测试
-moon run cmd/moonnet -- demo     # 跑一个内置场景并打印报告
-moon run cmd/moonnet -- tcp      # 跑一次完整的 TCP 握手与批量传输
-moon run cmd/moonnet -- lossy    # 同一场景，无丢包 vs 1% 丢包对比
-moon run cmd/moonnet -- cc       # 有无拥塞控制的对比
 moon run cmd/moonnet -- list     # 列出 scenarios 目录里的实验
 moon run cmd/moonnet -- run scenarios/long-fat.json --cc cubic
 moon run cmd/moonnet -- compare scenarios/long-fat.json --cc reno,cubic
 moon run cmd/moonnet -- sweep scenarios/small-buffers.json --field loss --from 0 --to 0.02 --steps 5
+moon run cmd/moonnet -- run scenarios/fairness.json   # 多条流抢一条链路
 ```
 
-demo 的输出：
+命令只有五个，每个都对应一份可编辑的场景文件。**五个子命令就是全部接口**：一件事只有一种做法。
 
-```text
-moonnet-lab 0.1.0 (deterministic packet-level network simulator)
-
-scenario: 3 x 1500 B every 200 us over a 10 Mbps link, 5 ms delay
-arrivals: 6.200ms, 7.400ms, 8.600ms
-link:     uplink: 3 packets, 4500 bytes, 0 dropped, utilization 42.8%
-```
-
-三个 1500 字节的数据包相隔 200 微秒发出。10 Mbps 的链路上每个包要占用 1.2 毫秒，所以它们排队而不是重叠，到达时间正好相差一个发送时长。这类数字不是打印出来看看的：它们全部写进了回归测试。
-
-`tcp` 子命令走完整的协议路径——三次握手、20000 字节应用数据、逐段确认：
-
-```text
-handshake completed at 10.032ms
-transferred 20000 bytes in 29.636ms (5398.6 kbit/s)
-client: ESTABLISHED
-server: ESTABLISHED
-segments: 24 sent, 23 received
-```
-
-29.6 毫秒这个数字可以直接验算：接收窗口 8192 字节、MSS 1000 字节，最多 8 个段同时在途，20 个段需要大约三次往返，而一次往返是 10 毫秒加上链路的串行化时间。同样地，它也是一条回归测试。
-
-`lossy` 子命令把同一个场景跑两遍——一遍干净，一遍每条链路丢 1% 的包：
-
-```text
-clean path: 50000 bytes end to end in 380.734ms (1050.6 kbit/s), connect 50.032ms, 0 retransmissions
-1% loss:    50000 bytes end to end in 1.385s (288.6 kbit/s), connect 50.032ms, 1 retransmissions (0 fast, 1 by timeout)
-
-estimator:  53 round trip samples, RTO 2.000s
-smoothed:   50.839ms round trip time
-```
-
-这组数字里藏着这个项目最想讲清楚的一件事：**同样一个丢包，出现在不同阶段，代价差二十倍。**
+## 一个例子：同一个丢包，代价差二十倍
 
 丢包出现在握手阶段时，连接要多花整整一秒。TCP 建立初期必须按最坏情况估计超时（RFC 6298 规定初始 RTO 为 1 秒），而握手报文的后面没有任何报文在飞，收不到重复 ACK，只能等定时器。
 
@@ -88,29 +56,37 @@ smoothed:   50.839ms round trip time
 
 换句话说，救回一个丢包靠的不是"更聪明地等待"，而是"手上有别的证据"。
 
-注意这里的 `RTO 2.000s`：超时之后 RTO 会翻倍，而窗口会塌回一个报文。慢下来是刻意的——下一节的对比说明它为什么要这么慢。
+把 `scenarios/lossy-transfer.json` 里的 `loss` 从 `0.01` 改成 `0` 再跑一次，就能看到同一个传输在两个阶段的区别。超时之后 RTO 会翻倍、窗口会塌回一个报文——慢下来是刻意的，下一节说明它为什么必须这么慢。
 
 ## 拥塞控制：为什么必须慢下来
 
-`cc` 子命令把同一个丢包场景跑两遍，唯一区别是发送端**是否对丢包做出反应**：
+第一个场景把同一条路跑两遍，唯一区别是发送端**是否对丢包做出反应**：
 
-```text
-A. small buffers: 10 Mbps, 25 ms one way, 1% loss, 64 KB window, 16-packet queue
-   payload 200000 bytes
-
-   none     3908.214s       0.4 kbit/s   105 retransmits  70 timeouts
-   reno     662.277ms    2415.9 kbit/s     2 retransmits   0 timeouts
-
-B. long fat path: 100 Mbps, 50 ms one way, 1% loss, 2 MB window, 2000-packet queue
-   payload 20000000 bytes
-
-   reno      214.129s     747.2 kbit/s   425 retransmits  27 timeouts
-   cubic     318.218s     502.7 kbit/s   199 retransmits  12 timeouts
+```bash
+moon run cmd/moonnet -- compare scenarios/small-buffers.json --cc none,reno
 ```
 
-场景 A 里，不带拥塞控制的发送端把接收端允诺的 64 KB 一次性推进去，而链路队列只能装 16 个报文。队列溢出、丢包；重传又是同样一整批、再次溢出；每次超时还按指数退避翻倍，一路涨到分钟级。200 KB 的数据传了 65 分钟——这就是 1986 年让互联网差点瘫掉的拥塞崩溃，在 200 行代码里复现了一遍。Reno 一开始只发 10 个报文，之后慢慢加速，队列始终没见到装不下的突发。**同一场景、同一种子、同样的丢包率：5901 倍的传输时间差。**
+```text
+scenario:   small buffers (seed 9, 200000 bytes, 1 run each)
 
-场景 B 是另一种问题。这条路径的带宽延迟积是 1.25 MB，链路每秒丢 1% 的包，两个算法都被丢包限制住了——这时的差别不在于谁更快发现丢包，而在于**丢了之后丢掉多少**。
+algorithm  mean       fastest    slowest    throughput  retransmits  timeouts
+none       3908.214s  3908.214s  3908.214s         0.4          105        70
+reno       662.277ms  662.277ms  662.277ms      2415.9            2         0
+```
+
+不带拥塞控制的发送端把接收端允诺的 64 KB 一次性推进去，而链路队列只能装 16 个报文。队列溢出、丢包；重传又是同样一整批、再次溢出；每次超时还按指数退避翻倍，一路涨到分钟级。200 KB 的数据传了 65 分钟——这就是 1986 年让互联网差点瘫掉的拥塞崩溃，在 200 行代码里复现了一遍。Reno 一开始只发 10 个报文，之后慢慢加速，队列始终没见到装不下的突发。**同一场景、同一种子、同样的丢包率：5901 倍的传输时间差。**
+
+第二个场景换一条长肥链路，先看一次运行：
+
+```text
+scenario:   long fat path (seed 9, 20000000 bytes, 1 run each)
+
+algorithm  mean      fastest   slowest   throughput  retransmits  timeouts
+reno       214.129s  214.129s  214.129s       747.2          425        27
+cubic      318.218s  318.218s  318.218s       502.7          199        12
+```
+
+这条路径的带宽延迟积是 1.25 MB，链路每秒丢 1% 的包，两个算法都被丢包限制住了——差别不在于谁更快发现丢包，而在于**丢了之后丢掉多少**。
 
 Reno 每次丢包把窗口砍一半，然后用一个往返一个报文的速度往回爬。CUBIC 只丢掉 30%，沿着三次曲线往回爬：刚丢包时曲线很陡（那段窗口路径已经证明过），接近丢包前的窗口时变平（再往上就是没有根据的试探）。
 
