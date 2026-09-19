@@ -36,7 +36,9 @@ fn usage() -> Unit {
   println("usage: moonnet <command>")
   println("")
   println("commands:")
-  println("  run FILE  run a scenario file, with --cc NAME and --json options")
+  println(
+    "  run FILE  run a scenario file, with --cc NAME, --discipline NAME and --json options",
+  )
   println(
     "  compare FILE --cc reno,cubic   run one scenario under several algorithms",
   )
@@ -260,17 +262,21 @@ fn parse_number(text : String) -> Result[Double, String] {
 fn run_scenario(args : Array[String]) -> Unit {
   if args.length() < 3 {
     println(
-      "usage: moonnet run <scenario.json> [--cc none|reno|cubic] [--json]",
+      "usage: moonnet run <scenario.json> [--cc none|reno|cubic] [--discipline drop-tail|red|codel] [--json]",
     )
     return
   }
   let path = args[2]
   let mut algorithm = ""
+  let mut discipline = ""
   let mut as_json = false
   let mut index = 3
   while index < args.length() {
     if args[index] == "--cc" && index + 1 < args.length() {
       algorithm = args[index + 1]
+      index = index + 2
+    } else if args[index] == "--discipline" && index + 1 < args.length() {
+      discipline = args[index + 1]
       index = index + 2
     } else if args[index] == "--json" {
       as_json = true
@@ -309,10 +315,27 @@ fn run_scenario(args : Array[String]) -> Unit {
       }
     }
   }
-  let experiment = if algorithm == "" {
+  if discipline != "" {
+    match @lab.known_discipline(discipline) {
+      Ok(_) => ()
+      Err(message) => {
+        println(message)
+        return
+      }
+    }
+  }
+  // The override rewrites the uplink, which is the link that carries the data in
+  // every scenario in this repository. Rewriting both ends would silently change
+  // the return path as well, and a run is supposed to vary one thing.
+  let with_cc = if algorithm == "" {
     scenario
   } else {
     { ..scenario, algorithm, }
+  }
+  let experiment = if discipline == "" {
+    with_cc
+  } else {
+    { ..with_cc, uplink: { ..with_cc.uplink, discipline, }, }
   }
   // A scenario that names several flows is a fairness experiment: the flows
   // share one path, so the interesting output is per-flow rather than per-run.

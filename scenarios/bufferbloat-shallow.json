@@ -1,0 +1,29 @@
+{
+  "name": "bufferbloat: the same path with a shallow buffer",
+  "seed": 9,
+  "payload_bytes": 3000000,
+  "algorithm": "cubic",
+  "uplink": {
+    "bandwidth_bps": 5000000,
+    "delay_ms": 10,
+    "loss": 0.0,
+    "queue_packets": 64,
+    "discipline": "drop-tail"
+  },
+  "downlink": {
+    "bandwidth_bps": 5000000,
+    "delay_ms": 10,
+    "loss": 0.0,
+    "queue_packets": 64
+  },
+  "client": {
+    "mss": 1000,
+    "receive_window": 1000000,
+    "initial_seq": 1000
+  },
+  "server": {
+    "mss": 1000,
+    "receive_window": 2000000,
+    "initial_seq": 5000
+  }
+}

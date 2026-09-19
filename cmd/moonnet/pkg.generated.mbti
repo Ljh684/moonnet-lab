@@ -8,10 +8,6 @@ package "Ljh684/moonnet-lab/cmd/moonnet"
 // Types and methods
 type CommonOptions
 
-type Scenario
-
-type TransferResult
-
 // Type aliases
 
 // Traits

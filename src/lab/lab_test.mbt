@@ -39,6 +39,76 @@ fn scenario_error(text : String) -> String {
 }
 
 ///|
+/// A path with far more buffer than the traffic needs, which is the shape that
+/// makes a queue stand rather than merely fill.
+let standing_queue_document : String =
+  #|{
+  #|  "name": "standing queue",
+  #|  "seed": 9,
+  #|  "payload_bytes": 1000000,
+  #|  "algorithm": "cubic",
+  #|  "uplink": { "bandwidth_bps": 5000000, "delay_ms": 10, "loss": 0.0, "queue_packets": 300 },
+  #|  "downlink": { "bandwidth_bps": 5000000, "delay_ms": 10, "loss": 0.0, "queue_packets": 64 },
+  #|  "client": { "mss": 1000, "receive_window": 1000000, "initial_seq": 1000 },
+  #|  "server": { "mss": 1000, "receive_window": 2000000, "initial_seq": 5000 }
+  #|}
+
+///|
+test "a scenario reads the buffer discipline it names" {
+  let scenario = scenario_of(
+    "{\"name\": \"managed\", \"payload_bytes\": 1000, \"uplink\": {\"bandwidth_bps\": 1000000, \"discipline\": \"codel\"}}",
+  )
+  inspect(scenario.uplink.discipline, content="codel")
+  // A scenario that describes one end gets it in both directions.
+  inspect(scenario.downlink.discipline, content="codel")
+  // A link that says nothing is drop-tail, the discipline every device shipped
+  // with before the argument for queue management was won.
+  inspect(scenario_of(sample_document).uplink.discipline, content="drop-tail")
+}
+
+///|
+test "a misspelled discipline is reported when the scenario is read" {
+  inspect(
+    scenario_error(
+      "{\"name\": \"typo\", \"payload_bytes\": 1000, \"uplink\": {\"bandwidth_bps\": 1000000, \"discipline\": \"tail-drop\"}}",
+    ),
+    content="scenario.link.discipline \"tail-drop\" is not one of: drop-tail, red, codel",
+  )
+}
+
+///|
+test "an early drop shortens the queue when the transport reacts to it" {
+  let scenario = scenario_of(standing_queue_document)
+  let tail = @lab.run(scenario)
+  let codel = @lab.run({
+    ..scenario,
+    uplink: { ..scenario.uplink, discipline: "codel", },
+  })
+  // Drop-tail lets the window grow until the buffer is full, so every packet
+  // waits behind everything the two ends managed to put in flight.
+  inspect(tail.discipline, content="drop-tail")
+  inspect(tail.uplink_dropped_early, content="0")
+  inspect(tail.max_sojourn.render(), content="489.152ms")
+  // CoDel refuses the packets that would have stood in the queue, and the sender
+  // reacts by holding its window down, so both the wait and the transfer shrink.
+  inspect(codel.discipline, content="codel")
+  inspect(codel.uplink_dropped_early > 0, content="true")
+  inspect(codel.max_sojourn.render(), content="226.400ms")
+  // 489 ms of queueing under drop-tail against 226 ms under CoDel, with the same
+  // window and the same path.
+  inspect(codel.max_sojourn.ps * 2 < tail.max_sojourn.ps, content="true")
+  // And the same refusals pay for themselves in the transfer: dropping the
+  // packets that would have stood in the queue keeps the window down, so the
+  // sender stops waiting on a queue that is a quarter of a second deep.
+  inspect(tail.elapsed.render(), content="5.491s")
+  inspect(codel.elapsed.render(), content="1.793s")
+  // The mean occupancy is the one number here that does *not* compare: the
+  // drop-tail run lasts three times as long and spends much of that time idle
+  // and empty, which pulls its average below CoDel's. A mean occupancy describes
+  // one run, and the report presents it that way.
+}
+
+///|
 test "a scenario reads every field" {
   let scenario = scenario_of(sample_document)
   inspect(scenario.name, content="small buffers")
@@ -148,6 +218,25 @@ test "the report is a document with the fields it says it has" {
   // reader to divide two other fields.
   inspect(
     parsed.field("throughput_kbps").unwrap().as_number().unwrap() > 0.0,
+    content="true",
+  )
+  // The numbers that say what the buffer did, and which discipline produced them:
+  // a report of a queue measurement that does not name the queue's policy cannot
+  // be compared with anything.
+  inspect(
+    parsed.field("queue_discipline").unwrap().as_text().unwrap(),
+    content="drop-tail",
+  )
+  inspect(
+    parsed.field("uplink_dropped_early").unwrap().as_number().unwrap(),
+    content="0",
+  )
+  inspect(
+    parsed.field("mean_queue_packets").unwrap().as_number().unwrap() >= 0.0,
+    content="true",
+  )
+  inspect(
+    parsed.field("max_sojourn_ms").unwrap().as_number().unwrap() >= 0.0,
     content="true",
   )
 }

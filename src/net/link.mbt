@@ -86,7 +86,9 @@ pub fn[T] Link::new(
     spec,
     rng: @sim.Rng::new(seed).fork("link/" + spec.name),
     loss_key: @sim.mix64(seed, @sim.fnv1a64(spec.name)),
-    queue: PacketQueue::new(spec.queue),
+    // The queue derives its own random stream from the link's seed, so a
+    // probabilistic policy such as RED stays reproducible.
+    queue: PacketQueue::new(spec.queue, seed),
     deliver,
     busy_until: @sim.Time::zero(),
     service_time: @sim.Time::zero(),
@@ -117,7 +119,7 @@ pub fn[T] Link::send(
   if self.queue.is_empty() {
     self.started_at = sim.now()
   }
-  let admission = self.queue.enqueue(packet)
+  let admission = self.queue.enqueue(packet, sim.now())
   match admission {
     Accepted => self.pump(sim)
     _ => ()
@@ -137,7 +139,7 @@ pub fn[T] Link::pump(self : Link[T], sim : @sim.Sim) -> Unit {
   if sim.now().ps < self.busy_until.ps {
     return
   }
-  match self.queue.dequeue() {
+  match self.queue.dequeue(sim.now()) {
     None => ()
     Some(packet) => {
       let service = @sim.Time::serialize(
@@ -267,6 +269,31 @@ pub fn[T] Link::lost(self : Link[T]) -> Int {
 }
 
 ///|
+/// Packets this link's queue management refused while the buffer still had room.
+///
+/// A drop-tail queue never reports one of these, so the counter is a direct
+/// reading of whether the configured discipline did anything at all.
+pub fn[T] Link::dropped_early(self : Link[T]) -> Int {
+  self.queue.dropped_early()
+}
+
+///|
+/// Mean occupancy of this link's buffer, in packets.
+///
+/// Peak occupancy says how big the buffer had to be; the mean says how full it
+/// usually was, which is what separates a buffer that absorbs bursts from one
+/// that permanently holds a backlog.
+pub fn[T] Link::mean_queue_packets(self : Link[T], sim : @sim.Sim) -> Double {
+  self.queue.mean_occupancy(sim.now())
+}
+
+///|
+/// The longest a packet waited in this link's buffer.
+pub fn[T] Link::max_sojourn(self : Link[T]) -> @sim.Time {
+  self.queue.max_sojourn()
+}
+
+///|
 /// A one-line summary for reports and tests.
 pub fn[T] Link::summary(self : Link[T], sim : @sim.Sim) -> String {
   self.spec.name +
@@ -276,7 +303,9 @@ pub fn[T] Link::summary(self : Link[T], sim : @sim.Sim) -> String {
   self.bytes_sent.to_string() +
   " bytes, " +
   self.dropped().to_string() +
-  " dropped, " +
+  " dropped (" +
+  self.dropped_early().to_string() +
+  " early), " +
   self.lost.to_string() +
   " lost, utilization " +
   percent(self.utilization(sim))

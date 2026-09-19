@@ -25,6 +25,8 @@ pub fn jain_index(Array[Double]) -> Double
 
 pub fn known_algorithm(String) -> Result[Unit, String]
 
+pub fn known_discipline(String) -> Result[Unit, String]
+
 pub fn render_table(Array[String], Array[Array[String]]) -> String
 
 pub fn run(Scenario) -> RunReport
@@ -86,6 +88,7 @@ pub(all) struct LinkProfile {
   delay : @sim.Time
   loss : Double
   queue_packets : Int
+  discipline : String
 } derive(Eq, @debug.Debug)
 
 pub(all) struct RunReport {
@@ -104,7 +107,11 @@ pub(all) struct RunReport {
   final_cwnd : Int
   final_ssthresh : Int
   uplink_dropped : Int
+  uplink_dropped_early : Int
   uplink_lost : Int
+  discipline : String
+  mean_queue_packets : Double
+  max_sojourn : @sim.Time
 } derive(Eq, @debug.Debug)
 pub fn RunReport::throughput_kbps(Self) -> Double
 pub fn RunReport::to_json_text(Self) -> String

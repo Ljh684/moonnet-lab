@@ -6,6 +6,10 @@ pub(all) struct LinkProfile {
   delay : @sim.Time
   loss : Double
   queue_packets : Int
+  /// How the buffer is managed: `drop-tail`, `red` or `codel`. The last two
+  /// refuse packets while the buffer is still below full, which is the only way
+  /// to keep a queue from standing.
+  discipline : String
 } derive(Eq, Debug)
 
 ///|
@@ -211,6 +215,22 @@ pub fn known_algorithm(name : String) -> Result[Unit, String] {
 }
 
 ///|
+/// The name of a buffer management discipline, checked here so that a typo is
+/// reported when the scenario is read rather than silently turning into
+/// drop-tail.
+pub fn known_discipline(name : String) -> Result[Unit, String] {
+  match name {
+    "drop-tail" | "red" | "codel" => Ok(())
+    _ =>
+      Err(
+        "scenario.link.discipline \"" +
+        name +
+        "\" is not one of: drop-tail, red, codel",
+      )
+  }
+}
+
+///|
 fn link_profile(
   document : @json.Json,
   field : String,
@@ -245,12 +265,21 @@ fn link_profile(
   if queue < 1.0 {
     return Err("scenario." + field + ".queue_packets must be at least 1")
   }
+  let discipline = match text_field(section, field, "discipline", "drop-tail") {
+    Ok(value) => value
+    Err(message) => return Err(message)
+  }
+  match known_discipline(discipline) {
+    Ok(_) => ()
+    Err(message) => return Err(message)
+  }
   Ok({
     name: default_name,
     bandwidth_bps: bandwidth.to_int64(),
     delay: @sim.Time::from_ms_f(delay_ms),
     loss,
     queue_packets: queue.to_int(),
+    discipline,
   })
 }
 

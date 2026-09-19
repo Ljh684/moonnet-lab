@@ -40,3 +40,4 @@ jobs:
         run: |
           moon run cmd/moonnet -- list
           moon run cmd/moonnet -- compare scenarios/long-fat.json --cc reno,cubic
+          moon run cmd/moonnet -- run scenarios/bufferbloat.json --discipline codel

@@ -23,7 +23,7 @@ moonnet-lab 把网络行为建模成纯函数：给定拓扑、流量、参数�
 | 模块 | 内容 | 状态 |
 | --- | --- | --- |
 | `src/sim` | 虚拟时间、确定性事件队列、可复现随机源 | 完成 |
-| `src/net` | 数据包、有界队列（drop-tail）、链路（带宽/延迟/抖动/丢包） | 完成 |
+| `src/net` | 数据包、有界队列（drop-tail / RED / CoDel）、链路（带宽/延迟/抖动/丢包） | 完成 |
 | `src/tcp` | 连接状态机、三次握手、序号与累计确认、滑动窗口、乱序重组 | 完成 |
 | `src/tcp` | RTO 估计（RFC 6298）、Karn 算法、超时重传与指数退避、快速重传与多丢包恢复 | 完成 |
 | `src/tcp` | 可插拔拥塞控制接口、Reno（RFC 5681/6928）、CUBIC（RFC 9438） | 完成 |
@@ -44,6 +44,7 @@ moon run cmd/moonnet -- run scenarios/long-fat.json --cc cubic
 moon run cmd/moonnet -- compare scenarios/long-fat.json --cc reno,cubic
 moon run cmd/moonnet -- sweep scenarios/small-buffers.json --field loss --from 0 --to 0.02 --steps 5
 moon run cmd/moonnet -- run scenarios/fairness.json   # 多条流抢一条链路
+moon run cmd/moonnet -- run scenarios/bufferbloat.json --discipline codel
 ```
 
 命令只有五个，每个都对应一份可编辑的场景文件。**五个子命令就是全部接口**：一件事只有一种做法。
@@ -223,6 +224,40 @@ uplink:     65 dropped at the queue, 1 lost on the wire
 
 先看聚合吞吐：12.19 MB / 10 秒 ≈ 9.75 Mbps，链路利用率 97%。这个数对得上，再看份额怎么分。
 
+## 缓冲区该多深：同一段传输，四种队列策略
+
+拥塞控制决定发送端多快，队列决定这些包在链路上等多久。到这一版为止，队列可以按三种策略管理：`drop-tail`（满了才丢，设备默认）、`red`（按平均占用概率提前丢）、`codel`（按队头等待时间提前丢）。策略写在场景文件里，和带宽、延迟并排：
+
+```json
+"uplink": { "bandwidth_bps": 5000000, "delay_ms": 10, "queue_packets": 600, "discipline": "codel" }
+```
+
+`scenarios/bufferbloat.json` 描述的是一条典型的家用上行：5 Mbps、10 毫秒传播延迟、缓冲区 600 个包（约一秒的排队空间）、3 MB 传输。**拥塞控制固定为 CUBIC，只换队列策略**——否则比较的是两个变量：
+
+```bash
+moon run cmd/moonnet -- run scenarios/bufferbloat.json                        # drop-tail
+moon run cmd/moonnet -- run scenarios/bufferbloat.json --discipline codel
+moon run cmd/moonnet -- run scenarios/bufferbloat.json --discipline red
+moon run cmd/moonnet -- run scenarios/bufferbloat-shallow.json                # 同一条路径，缓冲区 64 个包
+```
+
+| 队列策略 | 缓冲区 | 传输耗时 | 吞吐 | 最坏排队延迟 | 队列丢弃 | 超时 |
+| --- | --- | --- | --- | --- | --- | --- |
+| drop-tail | 600 包 | 16.610s | 1444.9 kbit/s | 978.7 ms | 614 次（全部在队尾） | 0 |
+| CoDel | 600 包 | 5.044s | 4757.7 kbit/s | 226.4 ms | 34 次（全部提前） | 0 |
+| RED | 600 包 | 19273.903s | 1.2 kbit/s | 978.7 ms | 329 次（192 次提前） | 326 |
+| drop-tail | 64 包 | 7.403s | 3241.7 kbit/s | 104.4 ms | 134 次（全部在队尾） | 0 |
+
+三条结论，一条比一条不好听：
+
+1. **深缓冲区不等于更有余量，它更慢。** 同一条路径、同一份数据，缓冲区从 64 个包加到 600 个包：传输从 7.4 秒涨到 16.6 秒，最坏排队延迟从 104 毫秒涨到 979 毫秒。全程 0 次超时、614 次快速重传——代价来自 CUBIC 对"一次溢出里成批丢失"的恢复，以及被自己的队列拉到近一秒的往返时间，不是定时器。
+2. **CoDel 修的正是这件事，而且吞吐更高。** 它在缓冲区还空着一大半时就开始拒绝包（34 次拒绝全部是提前丢弃），发送端随之收缩窗口，队列不再站着：最坏排队延迟降到 226 毫秒，传输快了 3.3 倍，吞吐从 1445 涨到 4758 kbit/s（同一条 5 Mbps 链路的 95%）。
+3. **RED 在这条路径上把连接锁死了。** 3 MB 数据用了 5.4 小时，326 次超时。RED 的判定量是"到达时更新的平均占用"：单条流把平均值推过上限之后，发送端停止发包，而这个平均值只能被**到达的包**推低，于是每 60 秒一次的定时器重传刚一到就被拒绝。换个拥塞控制也一样（`--cc reno` 是 17128.905s / 294 次超时），所以这是队列策略的性质，不是某个算法的性质。
+
+第 3 条是这一轮最想记录的结果：它不是设计出来的结论，而是跑出来的。RED 的这种锁死（以及"它为什么需要 gentle/ARED 这类改良"）在文献里有记载，但把它和 CoDel 放在同一份场景文件、同一份报告格式下对照，是文档读不出来的东西——**这正是"能改参数的实验台"和"读文档"的区别。**
+
+这张表把算法固定在 CUBIC。换 `--cc reno` 会得到另一幅图景，而且比这张表更值得警惕：深缓冲区下 drop-tail 16.303s、CoDel 36.271s（Reno 对每一次丢弃都减半窗口，零星丢弃比成批队尾丢弃更贵）；64 包缓冲区下 drop-tail 要 10047.347s、192 次超时。后一个数字我们**没有把握解释**，它和路线图里那个尚未查清的问题（成批丢失后只能靠定时器推进）很可能是同一件事。数据留在这里，解释等查清再写。
+
 ## 确定性是怎么保证的
 
 1. **时间是整数。** 虚拟时间以皮秒计数，存成 `Int64`。整个仿真里没有一处用浮点数做调度决策，因此不存在两个后端舍入到不同结果的可能。
@@ -235,10 +270,14 @@ uplink:     65 dropped at the queue, 1 lost on the wire
 ## 目录结构
 
 ```text
-src/sim/     虚拟时间、事件内核、随机源
-src/net/     数据包、队列、链路
-cmd/moonnet/ 命令行入口
-docs/        设计说明与路线图
+src/sim/       虚拟时间、事件内核、随机源
+src/net/       数据包、队列（含队列管理策略）、链路
+src/tcp/       连接状态机、重传与恢复、拥塞控制
+src/json/      零依赖 JSON 读写
+src/lab/       场景、报告、对比与扫描、多流公平性
+cmd/moonnet/   命令行入口
+scenarios/     可编辑的实验文件
+docs/          设计说明、路线图、申报书
 ```
 
 设计取舍写在 [docs/design.md](docs/design.md)，后续计划写在 [docs/roadmap.md](docs/roadmap.md)。
@@ -255,22 +294,25 @@ MoonBit 生态里已经有几款通用离散事件仿真引擎，也有 pcap 与
 | --- | --- | --- |
 | 时间单位 | 抽象 tick | 皮秒整数，可手算校验（1500 字节 @ 10 Mbps = 1.2 毫秒） |
 | 网络模型 | 消息延迟区间 + 丢弃百分比 | 带宽、传播延迟、抖动、按字节与包数限制的队列 |
+| 队列 | 排队论模型（顾客、服务时间、到达间隔） | 有界缓冲区 + 队列管理策略（drop-tail / RED / CoDel），排队延迟是可测量 |
 | 协议内容 | 通用事件类型（消息/任务/定时器/状态转移/外部调用） | TCP 状态机、RTO 估计（RFC 6298）、快速重传与多丢包恢复 |
 | 算法内容 | 重试、熔断、限流、负载均衡等可靠性模式 | Reno（RFC 5681/6928）、CUBIC（RFC 9438）等拥塞控制算法 |
 | 用途 | 让服务里偶发的失败可复现，进 CI 回归 | 回答"这条路径上哪个算法更好、缓冲区该多大" |
 
 一句话：**moonsim 让"我的服务会不会出错"变成可复现的测试，本项目让"网络在这组参数下会怎样"变成可复现的实验。** 前者的核心是 invariant 与失败证据，后者的核心是物理量（字节、比特率、微秒）与协议标准。两者共享"确定性虚拟时间 + 种子"这个基础想法——这个想法在 MoonBit 生态里被两个不同层次的项目采用，本身就说明它是对的。
 
+队列那一条是这套差别里最锋利的地方，值得单独说清楚。moonsim 的队列是排队论意义上的"顾客与服务时间"：它回答"要排多久才轮到"，不回答"排队本身改变了网络的行为吗"。本项目的队列是链路的一部分——**包在缓冲区里等待的时间就是端到端的延迟**，而缓冲区多大、满了怎么丢，会反过来改变发送端的窗口决策。上面那节的结果就是这个回路的产物：同一条 5 Mbps 链路、同一份 3 MB 数据、同一个拥塞控制，只把"满了才丢"换成"等待超时就提前丢"，传输时间从 16.6 秒变成 5.0 秒。moonsim 的模型里既没有"拥塞窗口"也没有"队头等待时间"，这两个量都不存在，所以它结构上产不出这个结论——不是它做得不够好，是它研究的对象不同。
+
 具体到本项目能回答、而通用仿真框架结构上回答不了的问题，有四类：
 
 1. **物理量可核对**：时间是皮秒整数、队列按字节计量，所以"1500 字节的帧在 10 Mbps 链路上占 1.2 毫秒"是能手算验证并写成断言的，不是抽样出来的参数。
 2. **协议与算法本身**：TCP 状态机、RFC 6298 的 RTO 估计、Karn 算法、快速重传与多丢包恢复、Reno 与 CUBIC。通用框架里没有"拥塞窗口"这个概念。
-3. **网络工程问题**：这条路径上哪个算法更好、缓冲区该多大、多条流怎么分带宽。
+3. **网络工程问题**：这条路径上哪个算法更好、缓冲区该多大（深缓冲区比浅缓冲区慢一倍是这一版测出来的）、队列该用什么策略、多条流怎么分带宽。
 4. **受控实验**：丢包按包身份决定（两行遇到同一串丢包）、场景文件、固定字段顺序的报告、多种子平均——结论能被复算，也能被推翻。
 
 ## English summary
 
-moonnet-lab is a deterministic packet-level network simulator and TCP congestion-control laboratory written in MoonBit, with no third-party dependencies. Given a topology, a traffic pattern and a seed, a run produces byte-identical event ordering, random draws and metrics. Virtual time is an exact integer in picoseconds, events are ordered by `(time, arrival sequence)`, and the PRNG is frozen with pinned reference vectors. The kernel and the link layer are complete and tested; the TCP stack, the congestion-control algorithms and the reporting layer are in progress.
+moonnet-lab is a deterministic packet-level network simulator and TCP congestion-control laboratory written in MoonBit, with no third-party dependencies. Given a topology, a traffic pattern and a seed, a run produces byte-identical event ordering, random draws and metrics. Virtual time is an exact integer in picoseconds, events are ordered by `(time, arrival sequence)`, and the PRNG is frozen with pinned reference vectors. The kernel, the link layer with three queue disciplines (drop-tail, RED, CoDel), the TCP stack with Reno and CUBIC, and the experiment layer (scenarios, comparison, sweep, fairness) are complete and tested; 95 tests pass on a clean runner.
 
 ## License
 

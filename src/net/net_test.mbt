@@ -1,4 +1,26 @@
 ///|
+/// A drop-tail queue for the tests below. The seed only matters to probabilistic
+/// policies such as RED.
+fn test_queue(spec : @net.QueueSpec) -> @net.PacketQueue[Unit] {
+  @net.PacketQueue::new(spec, 1UL)
+}
+
+///|
+/// Put a packet in at the instant the queue tests operate at.
+fn put(
+  queue : @net.PacketQueue[Unit],
+  packet : @net.Packet[Unit],
+) -> @net.Admission {
+  queue.enqueue(packet, @sim.Time::zero())
+}
+
+///|
+/// Take a packet out at the instant the queue tests operate at.
+fn take(queue : @net.PacketQueue[Unit]) -> @net.Packet[Unit]? {
+  queue.dequeue(@sim.Time::zero())
+}
+
+///|
 fn data_packet(id : Int, size : Int) -> @net.Packet[Unit] {
   // These tests use the packet id as its identity, so that loss can be reasoned
   // about packet by packet.
@@ -13,26 +35,22 @@ fn untagged_packet(id : Int, size : Int) -> @net.Packet[Unit] {
 
 ///|
 test "queue is first in first out" {
-  let queue : @net.PacketQueue[Unit] = @net.PacketQueue::new(
-    @net.QueueSpec::packets(4),
-  )
-  inspect(queue.enqueue(data_packet(1, 100)).to_string(), content="accepted")
-  inspect(queue.enqueue(data_packet(2, 100)).to_string(), content="accepted")
+  let queue : @net.PacketQueue[Unit] = test_queue(@net.QueueSpec::packets(4))
+  inspect(put(queue, data_packet(1, 100)).to_string(), content="accepted")
+  inspect(put(queue, data_packet(2, 100)).to_string(), content="accepted")
   inspect(queue.length(), content="2")
-  inspect(queue.dequeue().unwrap().id, content="1")
-  inspect(queue.dequeue().unwrap().id, content="2")
+  inspect(take(queue).unwrap().id, content="1")
+  inspect(take(queue).unwrap().id, content="2")
   inspect(queue.is_empty(), content="true")
 }
 
 ///|
 test "queue refuses packets beyond its packet limit" {
-  let queue : @net.PacketQueue[Unit] = @net.PacketQueue::new(
-    @net.QueueSpec::packets(2),
-  )
-  inspect(queue.enqueue(data_packet(1, 100)).to_string(), content="accepted")
-  inspect(queue.enqueue(data_packet(2, 100)).to_string(), content="accepted")
+  let queue : @net.PacketQueue[Unit] = test_queue(@net.QueueSpec::packets(2))
+  inspect(put(queue, data_packet(1, 100)).to_string(), content="accepted")
+  inspect(put(queue, data_packet(2, 100)).to_string(), content="accepted")
   inspect(
-    queue.enqueue(data_packet(3, 100)).to_string(),
+    put(queue, data_packet(3, 100)).to_string(),
     content="dropped: packet limit",
   )
   inspect(queue.dropped(), content="1")
@@ -41,13 +59,11 @@ test "queue refuses packets beyond its packet limit" {
 
 ///|
 test "queue refuses packets beyond its byte limit" {
-  let queue : @net.PacketQueue[Unit] = @net.PacketQueue::new(
-    @net.QueueSpec::bytes(3000),
-  )
-  inspect(queue.enqueue(data_packet(1, 1500)).to_string(), content="accepted")
-  inspect(queue.enqueue(data_packet(2, 1500)).to_string(), content="accepted")
+  let queue : @net.PacketQueue[Unit] = test_queue(@net.QueueSpec::bytes(3000))
+  inspect(put(queue, data_packet(1, 1500)).to_string(), content="accepted")
+  inspect(put(queue, data_packet(2, 1500)).to_string(), content="accepted")
   inspect(
-    queue.enqueue(data_packet(3, 1500)).to_string(),
+    put(queue, data_packet(3, 1500)).to_string(),
     content="dropped: byte limit",
   )
   inspect(queue.bytes(), content="3000")
@@ -56,14 +72,12 @@ test "queue refuses packets beyond its byte limit" {
 
 ///|
 test "ring buffer keeps working across wrap-around" {
-  let queue : @net.PacketQueue[Unit] = @net.PacketQueue::new(
-    @net.QueueSpec::packets(3),
-  )
+  let queue : @net.PacketQueue[Unit] = test_queue(@net.QueueSpec::packets(3))
   let mut index = 0
   let mut order_ok = true
   while index < 50 {
-    queue.enqueue(data_packet(index, 10)) |> ignore
-    let taken = queue.dequeue()
+    put(queue, data_packet(index, 10)) |> ignore
+    let taken = take(queue)
     match taken {
       None => order_ok = false
       Some(packet) => if packet.id != index { order_ok = false }
@@ -73,6 +87,118 @@ test "ring buffer keeps working across wrap-around" {
   inspect(order_ok, content="true")
   inspect(queue.is_empty(), content="true")
   inspect(queue.peak().0, content="1")
+}
+
+///|
+/// Drive a queue with a synthetic offered load and return it for inspection.
+///
+/// One packet arrives every `arrival_every` and one leaves every `drain_every`
+/// while the queue is non-empty, so the ratio of the two is the offered load.
+/// The queue is driven directly rather than through a link because these tests
+/// are about the discipline, not about the wire.
+fn loaded_queue(
+  spec : @net.QueueSpec,
+  arrivals : Int,
+  arrival_every : @sim.Time,
+  drain_every : @sim.Time,
+) -> @net.PacketQueue[Unit] {
+  let queue : @net.PacketQueue[Unit] = @net.PacketQueue::new(spec, 1UL)
+  let mut now = @sim.Time::zero()
+  let mut next_drain = @sim.Time::zero()
+  let mut index = 0
+  while index < arrivals {
+    now = @sim.Time::from_ps(now.ps + arrival_every.ps)
+    while next_drain.ps <= now.ps {
+      queue.dequeue(next_drain) |> ignore
+      next_drain = @sim.Time::from_ps(next_drain.ps + drain_every.ps)
+    }
+    queue.enqueue(data_packet(index, 1000), now) |> ignore
+    index = index + 1
+  }
+  queue
+}
+
+///|
+test "drop-tail never refuses a packet before the buffer is full" {
+  let queue = loaded_queue(
+    @net.QueueSpec::packets(200),
+    2000,
+    @sim.Time::from_us(500L),
+    @sim.Time::from_us(1000L),
+  )
+  // The load is twice what the drain can carry, so the buffer fills and stays
+  // full; every refusal must be a tail drop.
+  inspect(queue.dropped() > 0, content="true")
+  inspect(queue.dropped_early(), content="0")
+  inspect(queue.dropped_at_tail(), content=queue.dropped().to_string())
+  inspect(queue.peak().0, content="200")
+}
+
+///|
+test "red refuses packets while the buffer still has room" {
+  let queue = loaded_queue(
+    @net.QueueSpec::packets(200).with_discipline(
+      @net.QueueDiscipline::red_for(200),
+    ),
+    4000,
+    @sim.Time::from_us(500L),
+    @sim.Time::from_us(1000L),
+  )
+  // RED's thresholds for a 200 packet buffer start at 50 packets, so the mean
+  // occupancy crosses them while the buffer is still half empty.
+  inspect(queue.dropped_early() > 0, content="true")
+  inspect(queue.dropped_at_tail() > 0, content="true")
+  inspect(
+    queue.dropped(),
+    content=(queue.dropped_early() + queue.dropped_at_tail()).to_string(),
+  )
+}
+
+///|
+test "coDel refuses packets while the buffer is nowhere near full" {
+  // Twice as much traffic as the drain can carry, but into a buffer far larger
+  // than the backlog the load builds over the interval, so nothing has to be
+  // refused at all: drop-tail takes every packet and lets the wait grow, while
+  // CoDel refuses some of them because the wait at the head is already past its
+  // target.
+  let arrivals = 2000
+  let arrival_every = @sim.Time::from_us(500L)
+  let drain_every = @sim.Time::from_us(1000L)
+  let tail = loaded_queue(
+    @net.QueueSpec::packets(2000),
+    arrivals,
+    arrival_every,
+    drain_every,
+  )
+  let codel = loaded_queue(
+    @net.QueueSpec::packets(2000).with_discipline(@net.QueueDiscipline::codel()),
+    arrivals,
+    arrival_every,
+    drain_every,
+  )
+  // Drop-tail cannot refuse what fits, so the backlog grows by a packet a
+  // millisecond and the packets that get through wait half a second.
+  inspect(tail.dropped(), content="0")
+  inspect(
+    @net.format_one_decimal(tail.max_sojourn().to_ms_f()),
+    content="500.0",
+  )
+  inspect(tail.peak().0.to_string(), content="1000")
+  // CoDel watches the wait at the head rather than the number of packets in the
+  // buffer, so it starts refusing while the buffer is half empty and never has to
+  // drop at the tail.
+  inspect(codel.dropped_early().to_string(), content="27")
+  inspect(codel.dropped_at_tail(), content="0")
+  inspect(codel.peak().0.to_string(), content="973")
+  // Those 27 refusals move the head of the queue back by 3.5 ms out of 500. That
+  // is the limit of what a discipline can do on its own: it decides which packets
+  // are refused, not how much traffic arrives. A source that reacts to the
+  // refusal is what turns an early drop into a shorter queue, and the end to end
+  // version of that claim lives in the lab tests.
+  inspect(
+    @net.format_one_decimal(codel.max_sojourn().to_ms_f()),
+    content="496.5",
+  )
 }
 
 ///|

@@ -19,7 +19,16 @@ pub(all) struct RunReport {
   final_cwnd : Int
   final_ssthresh : Int
   uplink_dropped : Int
+  /// Of the packets the uplink refused, how many were refused by queue
+  /// management rather than by a full buffer.
+  uplink_dropped_early : Int
   uplink_lost : Int
+  /// How the uplink buffer is managed: `drop-tail`, `red` or `codel`.
+  discipline : String
+  /// Mean occupancy of the uplink buffer, in packets.
+  mean_queue_packets : Double
+  /// The longest a packet waited in the uplink buffer.
+  max_sojourn : @sim.Time
 } derive(Eq, Debug)
 
 ///|
@@ -35,12 +44,16 @@ pub fn algorithm_of(name : String, mss : Int) -> &@tcp.CongestionControl {
 ///|
 /// Build the connection pair a scenario describes.
 fn link_of(profile : LinkProfile) -> @net.LinkSpec {
-  @net.LinkSpec::new(
-    profile.name,
-    profile.bandwidth_bps,
-    profile.delay,
-    @net.QueueSpec::packets(profile.queue_packets),
-  ).with_loss(profile.loss)
+  let base = @net.QueueSpec::packets(profile.queue_packets)
+  let queue = match profile.discipline {
+    "red" =>
+      base.with_discipline(@net.QueueDiscipline::red_for(profile.queue_packets))
+    "codel" => base.with_discipline(@net.QueueDiscipline::codel())
+    _ => base
+  }
+  @net.LinkSpec::new(profile.name, profile.bandwidth_bps, profile.delay, queue).with_loss(
+    profile.loss,
+  )
 }
 
 ///|
@@ -77,6 +90,11 @@ pub fn run(scenario : Scenario) -> RunReport {
   sim.step_until(() => pair.server.delivered_bytes() == scenario.payload_bytes)
   |> ignore
   let delivered_at = sim.now()
+  // Read the buffer's mean occupancy here rather than after the drain: the run
+  // continues past the last byte until the connection is idle, and averaging
+  // over that quiet tail would flatter a buffer that stood full for the whole
+  // transfer.
+  let mean_queue_packets = pair.up.mean_queue_packets(sim)
   // Drain the rest so that the counters describe a settled connection, then read
   // them. The two timings above were taken before this point.
   sim.run()
@@ -99,7 +117,11 @@ pub fn run(scenario : Scenario) -> RunReport {
     final_cwnd: pair.client.cwnd(),
     final_ssthresh: pair.client.ssthresh(),
     uplink_dropped: pair.up.dropped(),
+    uplink_dropped_early: pair.up.dropped_early(),
     uplink_lost: pair.up.lost(),
+    discipline: scenario.uplink.discipline,
+    mean_queue_packets,
+    max_sojourn: pair.up.max_sojourn(),
   }
 }
 
@@ -150,7 +172,14 @@ pub fn RunReport::to_json_text(self : RunReport) -> String {
       @json.Json::Number(self.final_ssthresh.to_double()),
     ),
     ("uplink_dropped", @json.Json::Number(self.uplink_dropped.to_double())),
+    (
+      "uplink_dropped_early",
+      @json.Json::Number(self.uplink_dropped_early.to_double()),
+    ),
     ("uplink_lost", @json.Json::Number(self.uplink_lost.to_double())),
+    ("queue_discipline", @json.Json::Text(self.discipline)),
+    ("mean_queue_packets", @json.Json::Number(self.mean_queue_packets)),
+    ("max_sojourn_ms", @json.Json::Number(self.max_sojourn.to_ms_f())),
   ])
 }
 
@@ -206,9 +235,20 @@ pub fn RunReport::to_lines(self : RunReport) -> String {
   lines.push(
     "uplink:     " +
     self.uplink_dropped.to_string() +
-    " dropped at the queue, " +
+    " dropped at the queue (" +
+    self.uplink_dropped_early.to_string() +
+    " before it was full), " +
     self.uplink_lost.to_string() +
     " lost on the wire",
+  )
+  lines.push(
+    "queue:      " +
+    self.discipline +
+    ", mean " +
+    @net.format_one_decimal(self.mean_queue_packets) +
+    " packets occupied, " +
+    @net.format_one_decimal(self.max_sojourn.to_ms_f()) +
+    " ms longest wait",
   )
   lines.join("\n")
 }

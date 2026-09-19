@@ -9,6 +9,8 @@ import {
 // Values
 pub fn default_mtu() -> Int
 
+pub fn format_one_decimal(Double) -> String
+
 pub fn frame_overhead() -> Int
 
 pub fn percent(Double) -> String
@@ -22,7 +24,8 @@ pub(all) enum Admission {
   Accepted
   DroppedPacketLimit
   DroppedByteLimit
-}
+  DroppedEarly
+} derive(Eq, @debug.Debug)
 pub fn Admission::render(Self) -> String
 pub impl Show for Admission
 
@@ -44,7 +47,10 @@ pub fn[T] Link::bytes_sent(Self[T]) -> Int64
 pub fn[T] Link::draw_jitter(Self[T], @sim.Sim) -> @sim.Time
 pub fn[T] Link::draw_loss(Self[T], @sim.Sim, UInt64) -> Bool
 pub fn[T] Link::dropped(Self[T]) -> Int
+pub fn[T] Link::dropped_early(Self[T]) -> Int
 pub fn[T] Link::lost(Self[T]) -> Int
+pub fn[T] Link::max_sojourn(Self[T]) -> @sim.Time
+pub fn[T] Link::mean_queue_packets(Self[T], @sim.Sim) -> Double
 pub fn[T] Link::name(Self[T]) -> String
 pub fn[T] Link::new(LinkSpec, UInt64, (Packet[T]) -> Unit) -> Self[T]
 pub fn[T] Link::pump(Self[T], @sim.Sim) -> Unit
@@ -88,34 +94,61 @@ pub impl Show for PacketKind
 
 pub(all) struct PacketQueue[T] {
   spec : QueueSpec
-  mut slots : Array[Packet[T]?]
+  rng : @sim.Rng
+  mut slots : Array[Queued[T]?]
   mut head : Int
   mut count : Int
   mut bytes : Int
   mut admitted : Int
   mut dropped : Int
   mut dropped_bytes : Int
+  mut dropped_tail : Int
+  mut dropped_early : Int
   mut peak_packets : Int
   mut peak_bytes : Int
+  mut occupancy_integral : Int64
+  mut observed_at : @sim.Time
+  mut max_sojourn : @sim.Time
+  mut first_above : @sim.Time
+  mut dropping : Bool
+  mut drop_next : @sim.Time
+  mut drop_count : Int
+  mut average_occupancy : Double
 }
 pub fn[T] PacketQueue::admitted(Self[T]) -> Int
 pub fn[T] PacketQueue::bytes(Self[T]) -> Int
-pub fn[T] PacketQueue::dequeue(Self[T]) -> Packet[T]?
+pub fn[T] PacketQueue::dequeue(Self[T], @sim.Time) -> Packet[T]?
 pub fn[T] PacketQueue::dropped(Self[T]) -> Int
-pub fn[T] PacketQueue::enqueue(Self[T], Packet[T]) -> Admission
+pub fn[T] PacketQueue::dropped_at_tail(Self[T]) -> Int
+pub fn[T] PacketQueue::dropped_early(Self[T]) -> Int
+pub fn[T] PacketQueue::enqueue(Self[T], Packet[T], @sim.Time) -> Admission
 pub fn[T] PacketQueue::is_empty(Self[T]) -> Bool
 pub fn[T] PacketQueue::length(Self[T]) -> Int
-pub fn[T] PacketQueue::new(QueueSpec) -> Self[T]
+pub fn[T] PacketQueue::max_sojourn(Self[T]) -> @sim.Time
+pub fn[T] PacketQueue::mean_occupancy(Self[T], @sim.Time) -> Double
+pub fn[T] PacketQueue::new(QueueSpec, UInt64) -> Self[T]
 pub fn[T] PacketQueue::peak(Self[T]) -> (Int, Int)
 pub fn[T] PacketQueue::peek(Self[T]) -> Packet[T]?
-pub fn[T] PacketQueue::summary(Self[T]) -> String
+pub fn[T] PacketQueue::summary(Self[T], @sim.Time) -> String
+
+pub(all) enum QueueDiscipline {
+  DropTail
+  Red(Int, Int, Double)
+  Codel(@sim.Time, @sim.Time)
+} derive(Eq, @debug.Debug)
+pub fn QueueDiscipline::codel() -> Self
+pub fn QueueDiscipline::red_for(Int) -> Self
 
 pub(all) struct QueueSpec {
   max_packets : Int
   max_bytes : Int
+  discipline : QueueDiscipline
 } derive(Eq, @debug.Debug)
 pub fn QueueSpec::bytes(Int) -> Self
 pub fn QueueSpec::packets(Int) -> Self
+pub fn QueueSpec::with_discipline(Self, QueueDiscipline) -> Self
+
+type Queued[T]
 
 // Type aliases
 
