@@ -277,10 +277,10 @@ src/json/      零依赖 JSON 读写
 src/lab/       场景、报告、对比与扫描、多流公平性
 cmd/moonnet/   命令行入口
 scenarios/     可编辑的实验文件
-docs/          设计说明、路线图、申报书
+docs/          设计说明、路线图、生态定位、验证方式、申报书
 ```
 
-设计取舍写在 [docs/design.md](docs/design.md)，后续计划写在 [docs/roadmap.md](docs/roadmap.md)。
+文档分工：[docs/design.md](docs/design.md) 写设计取舍，[docs/roadmap.md](docs/roadmap.md) 写里程碑与验收方式，[docs/positioning.md](docs/positioning.md) 写与已有生态的关系，[docs/verification.md](docs/verification.md) 写怎么验证，[docs/proposal.md](docs/proposal.md) 是提交用的申报书。
 
 ## 与生态中已有工作的关系
 
@@ -309,6 +309,8 @@ MoonBit 生态里已经有几款通用离散事件仿真引擎，也有 pcap 与
 2. **协议与算法本身**：TCP 状态机、RFC 6298 的 RTO 估计、Karn 算法、快速重传与多丢包恢复、Reno 与 CUBIC。通用框架里没有"拥塞窗口"这个概念。
 3. **网络工程问题**：这条路径上哪个算法更好、缓冲区该多大（深缓冲区比浅缓冲区慢一倍是这一版测出来的）、队列该用什么策略、多条流怎么分带宽。
 4. **受控实验**：丢包按包身份决定（两行遇到同一串丢包）、场景文件、固定字段顺序的报告、多种子平均——结论能被复算，也能被推翻。
+
+更完整的论证（含"为什么不把这些做成 moonsim 的补丁"、与 Mininet / ns-3 的分工、以及立项前的生态扫描）写在 [docs/positioning.md](docs/positioning.md)。
 
 ## English summary
 
