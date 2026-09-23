@@ -80,7 +80,7 @@ moon run examples/embed_tcp/main    # 三个算法跑同一段传输
 moon run examples/rpc_retry/main    # 不同丢包率下，一次调用要几次重试
 ```
 
-包的职责、稳定面与兼容承诺写在 [docs/api.md](docs/api.md)：有内部状态的对象只暴露方法，值是记录，接口清单是随代码进版本库的 `pkg.generated.mbti`。
+包的职责、稳定面与兼容承诺写在 [docs/api.md](docs/api.md)：有内部状态的对象只暴露方法，值是记录，接口清单是随代码进版本库的 `pkg.generated.mbti`。模块目前按 git 或本地路径引用；发布到 mooncakes.io 只差维护者执行一次 `moon login` + `moon publish`，元数据已经就位。
 
 ## 一个例子：同一个丢包，代价差二十倍
 

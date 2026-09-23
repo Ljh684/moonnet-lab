@@ -1,6 +1,8 @@
 # 作为依赖使用：包的职责、入口与稳定面
 
-命令行工具只是这套库的一个使用者。把仓库作为依赖加进自己的模块（`moon.mod` 里的 `import`，或本地路径引用），就能在自己的程序或测试里直接调用下面这些包。发布到 mooncakes.io 只需维护者执行一次 `moon publish`——`moon.mod` 里的 name / version / readme / license / repository / keywords 都已就位。
+命令行工具只是这套库的一个使用者。把仓库作为依赖加进自己的模块（`moon.mod` 里的 `import`，或按本地路径 / git 引用），就能在自己的程序或测试里直接调用下面这些包。
+
+模块**尚未发布到 mooncakes.io**，这一步只差维护者登录后执行一次：`moon login`（首次）然后 `moon publish`。`moon.mod` 里的 name / version / readme / license / repository / keywords 都已就位，`moon publish --dry-run` 只会停在缺少凭据这一处。
 
 ## 包的职责与入口
 

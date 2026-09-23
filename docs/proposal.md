@@ -45,7 +45,7 @@
 
 **命令行只是库的一个使用者。** `cmd/moonnet` 建在 `src/*` 之上，`examples/*` 与它并列且互不依赖——库在中间，两层都是它的消费者。
 
-- **接口**：下游在 `moon.mod` 里加本模块即可调用五个库包（`sim` / `net` / `tcp` / `json` / `lab`）；发布到 mooncakes.io 只差维护者执行一次 `moon publish`，模块元数据已就位。
+- **接口**：下游在 `moon.mod` 里加本模块即可调用五个库包（`sim` / `net` / `tcp` / `json` / `lab`），今天按 git 或本地路径引用；发布到 mooncakes.io 只差维护者登录后执行一次 `moon publish`，模块元数据已就位。
 - **稳定面**：有内部状态的对象（`Sim`、`Rng`、`Link`、`PacketQueue`、`TcpConnection`、`Reno`、`Cubic`）字段私有、状态一律经方法读取；值是记录、字段即契约；每个包的 `pkg.generated.mbti` 随代码进版本库，接口改动在 diff 里可见。契约与兼容承诺见 [api.md](api.md)。
 - **被消费的证据**：[`examples/embed_tcp`](../examples/embed_tcp/embed.mbt) 在自己的程序里直接拼出一次传输并读指标；[`examples/rpc_retry`](../examples/rpc_retry/rpc.mbt) 带自己的超时 + 重试协议复用时钟与链路模型。两者都不读场景文件、不解析命令行，CI 在干净 runner 上运行它们。
 - **应用价值**：把网络不确定性变成可复现的测试输入——服务作者可以验证自己的重试/超时策略在 1%、20%、50% 丢包下的表现，部署前可以回答"缓冲区该多深、该用哪个拥塞控制"。库零依赖、无全局状态，每个仿真是独立的 `Sim::new(seed)` 对象。
