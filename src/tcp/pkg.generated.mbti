@@ -23,7 +23,7 @@ pub fn without_congestion_control() -> &CongestionControl
 // Types and methods
 type Buffered
 
-pub(all) struct Cubic {
+pub struct Cubic {
   mss : Int
   mut cwnd : Int
   mut ssthresh : Int
@@ -68,12 +68,12 @@ pub fn LinkPair::new(@sim.Sim, TcpConfig, TcpConfig, @net.LinkSpec, @net.LinkSpe
 pub fn LinkPair::new_with_cc(@sim.Sim, TcpConfig, TcpConfig, @net.LinkSpec, @net.LinkSpec, UInt64, &CongestionControl) -> Self
 pub fn LinkPair::summary(Self) -> String
 
-pub(all) struct NoCongestionControl {
+pub struct NoCongestionControl {
   limit : Int
 }
 pub fn NoCongestionControl::new() -> Self
 
-pub(all) struct Reno {
+pub struct Reno {
   mut cwnd : Int
   mut ssthresh : Int
   mut in_recovery : Bool
@@ -116,7 +116,7 @@ pub(all) struct TcpConfig {
 pub fn TcpConfig::new(Int, Int, UInt) -> Self
 pub fn TcpConfig::with_rto(Self, @sim.Time, @sim.Time, @sim.Time) -> Self
 
-pub(all) struct TcpConnection {
+pub struct TcpConnection {
   config : TcpConfig
   cc : &CongestionControl
   mut flow : UInt64

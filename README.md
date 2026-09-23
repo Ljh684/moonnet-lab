@@ -30,6 +30,7 @@ moonnet-lab 把网络行为建模成纯函数：给定拓扑、流量、参数�
 | `src/json` | 零依赖的 JSON 读写，供场景文件与报告使用 | 完成 |
 | `src/lab` | 场景文件、运行、指标报告、对比与扫描、多流公平性 | 完成 |
 | `cmd/moonnet` | 五个子命令：`run` / `compare` / `sweep` / `list` / `version` | 完成 |
+| `examples/` | 两个用库写成的消费者程序（不含命令行）：`embed_tcp`、`rpc_retry` | 完成 |
 
 **明确不做**：通用仿真框架（用 [moonsim](https://mooncakes.io/docs/zlhahaha/moonsim)）、pcap 解析（已有实现）、与真实网络互操作（用 Mininet）、大规模并发、图形界面。理由写在下面的"与生态中已有工作的关系"。
 
@@ -48,6 +49,38 @@ moon run cmd/moonnet -- run scenarios/bufferbloat.json --discipline codel
 ```
 
 命令只有五个，每个都对应一份可编辑的场景文件。**五个子命令就是全部接口**：一件事只有一种做法。
+
+## 作为库使用：命令行只是一个使用者
+
+要做实验的人用命令行；要写自己程序的人直接用库。两者之间没有中间层——命令行是薄薄一层包装，全部逻辑都在包里：
+
+```moonbit
+let sim = @sim.Sim::new(seed)                     // 虚拟时钟 + 冻结的随机源
+let pair = @tcp.LinkPair::new_with_cc(            // 两个端点 + 两条链路
+  sim,
+  @tcp.TcpConfig::new(1000, 64000, 1000U),
+  @tcp.TcpConfig::new(1000, 64000, 5000U),
+  @net.LinkSpec::new("up", 10_000_000L, @sim.Time::from_ms(25L), @net.QueueSpec::packets(64)).with_loss(0.01),
+  @net.LinkSpec::new("down", 10_000_000L, @sim.Time::from_ms(25L), @net.QueueSpec::packets(64)).with_loss(0.01),
+  seed,
+  @tcp.cubic(1000),
+)
+pair.connect(sim)
+pair.client.send(sim, Bytes::make(1_000_000, b'x'))
+sim.step_until(() => pair.server.delivered_bytes() == 1_000_000) |> ignore
+```
+
+仓库里有两个包专门演示这一点，它们是**库的使用者而不是库的一部分**：
+
+- [`examples/embed_tcp`](examples/embed_tcp/embed.mbt)——不读场景文件、不解析命令行，直接调用协议模型；测试断言同一 seed 两次运行结果一致。
+- [`examples/rpc_retry`](examples/rpc_retry/rpc.mbt)——带自己的协议（超时 + 有限重试）复用时钟与链路模型，`moon test` 断言重试预算把未送达的调用从 13/20 降到 4/20。
+
+```bash
+moon run examples/embed_tcp/main    # 三个算法跑同一段传输
+moon run examples/rpc_retry/main    # 不同丢包率下，一次调用要几次重试
+```
+
+包的职责、稳定面与兼容承诺写在 [docs/api.md](docs/api.md)：有内部状态的对象只暴露方法，值是记录，接口清单是随代码进版本库的 `pkg.generated.mbti`。
 
 ## 一个例子：同一个丢包，代价差二十倍
 
@@ -276,11 +309,12 @@ src/tcp/       连接状态机、重传与恢复、拥塞控制
 src/json/      零依赖 JSON 读写
 src/lab/       场景、报告、对比与扫描、多流公平性
 cmd/moonnet/   命令行入口
+examples/      用库写的两个程序（下游的样子）
 scenarios/     可编辑的实验文件
-docs/          设计说明、路线图、生态定位、验证方式、申报书
+docs/          设计说明、路线图、生态定位、验证方式、接口契约、申报书
 ```
 
-文档分工：[docs/design.md](docs/design.md) 写设计取舍，[docs/roadmap.md](docs/roadmap.md) 写里程碑与验收方式，[docs/positioning.md](docs/positioning.md) 写与已有生态的关系，[docs/verification.md](docs/verification.md) 写怎么验证，[docs/proposal.md](docs/proposal.md) 是提交用的申报书。
+文档分工：[docs/api.md](docs/api.md) 写包职责、稳定面与兼容承诺，[docs/design.md](docs/design.md) 写设计取舍，[docs/roadmap.md](docs/roadmap.md) 写里程碑与验收方式，[docs/positioning.md](docs/positioning.md) 写与已有生态的关系，[docs/verification.md](docs/verification.md) 写怎么验证，[docs/proposal.md](docs/proposal.md) 是提交用的申报书。
 
 ## 与生态中已有工作的关系
 
@@ -314,7 +348,7 @@ MoonBit 生态里已经有几款通用离散事件仿真引擎，也有 pcap 与
 
 ## English summary
 
-moonnet-lab is a deterministic packet-level network simulator and TCP congestion-control laboratory written in MoonBit, with no third-party dependencies. Given a topology, a traffic pattern and a seed, a run produces byte-identical event ordering, random draws and metrics. Virtual time is an exact integer in picoseconds, events are ordered by `(time, arrival sequence)`, and the PRNG is frozen with pinned reference vectors. The kernel, the link layer with three queue disciplines (drop-tail, RED, CoDel), the TCP stack with Reno and CUBIC, and the experiment layer (scenarios, comparison, sweep, fairness) are complete and tested; 95 tests pass on a clean runner.
+moonnet-lab is a deterministic packet-level network simulator and TCP congestion-control laboratory written in MoonBit, with no third-party dependencies. Given a topology, a traffic pattern and a seed, a run produces byte-identical event ordering, random draws and metrics. Virtual time is an exact integer in picoseconds, events are ordered by `(time, arrival sequence)`, and the PRNG is frozen with pinned reference vectors. The kernel, the link layer with three queue disciplines (drop-tail, RED, CoDel), the TCP stack with Reno and CUBIC, and the experiment layer (scenarios, comparison, sweep, fairness) are complete and tested; 102 tests pass on a clean runner. The command line tool is one consumer of the library: the two packages under `examples/` are consumers that never touch it, and [docs/api.md](docs/api.md) states what a downstream project may rely on and what is an implementation detail.
 
 ## License
 

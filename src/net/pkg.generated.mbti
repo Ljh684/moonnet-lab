@@ -29,7 +29,7 @@ pub(all) enum Admission {
 pub fn Admission::render(Self) -> String
 pub impl Show for Admission
 
-pub(all) struct Link[T] {
+pub struct Link[T] {
   spec : LinkSpec
   rng : @sim.Rng
   loss_key : UInt64
@@ -92,7 +92,7 @@ pub(all) enum PacketKind {
 pub fn PacketKind::render(Self) -> String
 pub impl Show for PacketKind
 
-pub(all) struct PacketQueue[T] {
+pub struct PacketQueue[T] {
   spec : QueueSpec
   rng : @sim.Rng
   mut slots : Array[Queued[T]?]

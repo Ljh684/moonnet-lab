@@ -1,0 +1,8 @@
+// The entry point. It is a separate package because a main package cannot be
+// depended on, and the point of this example is the package that can be.
+
+import {
+  "Ljh684/moonnet-lab/examples/embed_tcp",
+}
+
+pkgtype(kind: "executable")

@@ -1,0 +1,48 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "Ljh684/moonnet-lab/examples/rpc_retry"
+
+import {
+  "Ljh684/moonnet-lab/src/net",
+  "Ljh684/moonnet-lab/src/sim",
+  "moonbitlang/core/debug",
+}
+
+// Values
+pub fn call(@sim.Sim, RpcPolicy, @net.LinkSpec, @net.LinkSpec, UInt64) -> CallOutcome
+
+pub fn default_policy() -> RpcPolicy
+
+pub fn link_spec(String, Double) -> @net.LinkSpec
+
+pub fn measure(Double, RpcPolicy, Int) -> Measurement
+
+// Errors
+
+// Types and methods
+pub(all) struct CallOutcome {
+  attempts : Int
+  delivered : Bool
+  latency : @sim.Time
+} derive(Eq, @debug.Debug)
+
+pub(all) enum Frame {
+  Request
+  Reply
+} derive(Eq, @debug.Debug)
+
+pub(all) struct Measurement {
+  calls : Int
+  delivered : Int
+  mean_attempts : Double
+  mean_latency : @sim.Time
+} derive(Eq, @debug.Debug)
+pub fn Measurement::to_line(Self, Double) -> String
+
+pub(all) struct RpcPolicy {
+  timeout : @sim.Time
+  attempts : Int
+} derive(Eq, @debug.Debug)
+
+// Type aliases
+
+// Traits

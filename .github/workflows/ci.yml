@@ -41,3 +41,11 @@ jobs:
           moon run cmd/moonnet -- list
           moon run cmd/moonnet -- compare scenarios/long-fat.json --cc reno,cubic
           moon run cmd/moonnet -- run scenarios/bufferbloat.json --discipline codel
+
+      # The command line tool is one consumer of the library. These two are
+      # consumers that do not use it at all, which is the claim the repository
+      # makes about being usable as a dependency.
+      - name: Run the example consumers
+        run: |
+          moon run examples/embed_tcp/main
+          moon run examples/rpc_retry/main

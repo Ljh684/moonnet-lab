@@ -15,7 +15,7 @@ pub fn rotl64(UInt64, Int) -> UInt64
 // Errors
 
 // Types and methods
-pub(all) struct Rng {
+pub struct Rng {
   mut s0 : UInt64
   mut s1 : UInt64
   mut s2 : UInt64
@@ -38,7 +38,7 @@ pub(all) struct Scheduled {
   action : () -> Unit
 }
 
-pub(all) struct Sim {
+pub struct Sim {
   mut now : Time
   mut seq : Int
   mut processed : Int
@@ -65,7 +65,7 @@ pub fn Sim::start_journal(Self) -> Unit
 pub fn Sim::step(Self) -> Bool
 pub fn Sim::step_until(Self, () -> Bool, max_events? : Int) -> Bool
 
-pub(all) struct SplitMix64 {
+pub struct SplitMix64 {
   mut state : UInt64
 }
 pub fn SplitMix64::new(UInt64) -> Self

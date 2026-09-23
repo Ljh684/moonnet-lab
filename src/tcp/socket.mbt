@@ -134,7 +134,7 @@ struct Buffered {
 /// whatever `emit` is set to. That keeps the TCP logic testable without a
 /// network, and keeps "when does this happen" in the simulator rather than
 /// inside the protocol.
-pub(all) struct TcpConnection {
+pub struct TcpConnection {
   config : TcpConfig
   cc : &CongestionControl
   /// Which flow this connection is, when several share a bottleneck.

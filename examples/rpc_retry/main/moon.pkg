@@ -1,0 +1,9 @@
+// The entry point of the example. It is a separate package because a
+// library package is what a downstream project would depend on, and a main
+// package cannot be depended on.
+
+import {
+  "Ljh684/moonnet-lab/examples/rpc_retry",
+}
+
+pkgtype(kind: "executable")

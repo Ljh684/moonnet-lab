@@ -20,7 +20,7 @@
 /// unit RFC 9438 is written in and the constant `C` has the unit segments per
 /// second cubed. Bytes appear only at the boundary, where the connection asks
 /// for a window.
-pub(all) struct Cubic {
+pub struct Cubic {
   /// Segment size this connection was configured with.
   mss : Int
   /// Congestion window in segments.

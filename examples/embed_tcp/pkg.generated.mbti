@@ -1,0 +1,33 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "Ljh684/moonnet-lab/examples/embed_tcp"
+
+import {
+  "Ljh684/moonnet-lab/src/net",
+  "Ljh684/moonnet-lab/src/sim",
+  "Ljh684/moonnet-lab/src/tcp",
+  "moonbitlang/core/debug",
+}
+
+// Values
+pub fn algorithm(String, Int) -> &@tcp.CongestionControl
+
+pub fn link(String, Double) -> @net.LinkSpec
+
+pub fn transfer(&@tcp.CongestionControl, Int, Double, UInt64) -> Transfer
+
+// Errors
+
+// Types and methods
+pub(all) struct Transfer {
+  algorithm : String
+  delivered_bytes : Int
+  elapsed : @sim.Time
+  retransmits : Int
+  timeouts : Int
+  srtt : @sim.Time
+} derive(Eq, @debug.Debug)
+pub fn Transfer::to_line(Self) -> String
+
+// Type aliases
+
+// Traits

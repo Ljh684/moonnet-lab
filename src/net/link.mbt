@@ -59,7 +59,7 @@ pub fn LinkSpec::with_loss(self : LinkSpec, rate : Double) -> LinkSpec {
 /// The link owns no timer of its own; it asks the simulator to wake it up when
 /// the current transmission finishes, which is what keeps "how long is the link
 /// busy" a question about the model rather than about the host's clock.
-pub(all) struct Link[T] {
+pub struct Link[T] {
   spec : LinkSpec
   rng : @sim.Rng
   /// The number that decides loss for a packet identity on this link. Derived

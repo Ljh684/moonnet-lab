@@ -7,7 +7,7 @@
 /// memory of what the path has delivered before, which is why it gives ground to
 /// CUBIC on long fat links and why it is still the reference every other
 /// algorithm is measured against.
-pub(all) struct Reno {
+pub struct Reno {
   mut cwnd : Int
   mut ssthresh : Int
   mut in_recovery : Bool

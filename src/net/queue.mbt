@@ -128,7 +128,7 @@ struct Queued[T] {
 /// moves elements, so enqueue and dequeue are both O(1) and no allocation
 /// happens during a run. Allocation inside an event handler is the one thing
 /// that could make a simulation's timing depend on the host.
-pub(all) struct PacketQueue[T] {
+pub struct PacketQueue[T] {
   spec : QueueSpec
   /// The queue's own random stream, used by probabilistic policies. Derived from
   /// the link's seed, so a run stays reproducible down to which packet RED

@@ -3,7 +3,7 @@
 ///
 /// A single `UInt64` seed is expanded into a well-mixed state so that seeds as
 /// similar as `1` and `2` still produce unrelated streams.
-pub(all) struct SplitMix64 {
+pub struct SplitMix64 {
   mut state : UInt64
 }
 
@@ -29,7 +29,7 @@ pub fn SplitMix64::next_u64(self : SplitMix64) -> UInt64 {
 /// version of this package. The algorithm is frozen here, its reference vectors
 /// are pinned in the test suite, and nothing about it depends on the platform's
 /// word size or on how a host language seeds its own generator.
-pub(all) struct Rng {
+pub struct Rng {
   mut s0 : UInt64
   mut s1 : UInt64
   mut s2 : UInt64

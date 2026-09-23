@@ -49,7 +49,7 @@ pub(open) trait CongestionControl {
 /// This is not a straw man. It is the control case that shows what congestion
 /// control is buying: the same scenario run with and without it differs only in
 /// how the sender behaves when a packet goes missing.
-pub(all) struct NoCongestionControl {
+pub struct NoCongestionControl {
   limit : Int
 }
 

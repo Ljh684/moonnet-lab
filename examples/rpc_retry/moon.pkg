@@ -1,0 +1,8 @@
+// A consumer of the library rather than part of it: a request/response
+// protocol with a timeout and a bounded number of retries, written on top of
+// the virtual clock and the link model.
+
+import {
+  "Ljh684/moonnet-lab/src/sim",
+  "Ljh684/moonnet-lab/src/net",
+}

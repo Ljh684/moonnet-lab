@@ -99,7 +99,7 @@ fn heap_sift_down(heap : Array[Scheduled], start : Int) -> Unit {
 /// virtual time, the event queue and the random source; nothing reads the wall
 /// clock and nothing depends on hash iteration order, so two runs of the same
 /// configuration produce byte-identical journals and metrics.
-pub(all) struct Sim {
+pub struct Sim {
   mut now : Time
   mut seq : Int
   mut processed : Int
