@@ -155,6 +155,48 @@ test "red refuses packets while the buffer still has room" {
 }
 
 ///|
+test "red forgets a backlog that has drained" {
+  // A deliberately small ceiling, so the average only has to reach two packets
+  // for RED to refuse everything. The mechanism under test is the idle
+  // correction, not the size of the thresholds.
+  let queue : @net.PacketQueue[Unit] = @net.PacketQueue::new(
+    @net.QueueSpec::packets(64).with_discipline(
+      @net.QueueDiscipline::Red(1, 2, 0.1),
+    ),
+    1UL,
+  )
+  let mut now = @sim.Time::zero()
+  // Fill the buffer and keep pushing. The average is weighted 0.002 per
+  // arrival, so it needs about a thousand arrivals to climb to the buffer's
+  // size: that is the policy's memory, working as described.
+  let mut index = 0
+  while index < 4000 {
+    now = @sim.Time::from_ps(now.ps + 100_000L)
+    queue.enqueue(data_packet(index, 1000), now) |> ignore
+    index = index + 1
+  }
+  inspect(queue.average_occupancy() > 2.0, content="true")
+  inspect(queue.dropped_early() > 0, content="true")
+  // The link then drains the backlog at one packet per millisecond, which is
+  // also how the queue measures its own packet time.
+  while !queue.is_empty() {
+    now = @sim.Time::from_ps(now.ps + 1_000_000L)
+    queue.dequeue(now) |> ignore
+  }
+  let refused_before = queue.dropped_early()
+  // The sender is quiet for a second. A queue that has been empty that long
+  // has no backlog left to report, so the next packet has to be taken. Without
+  // the idle correction the average stayed where the full buffer left it and
+  // this packet was refused, which is what turned a drain into a stall.
+  now = @sim.Time::from_ps(now.ps + 1_000_000_000_000L)
+  inspect(
+    queue.enqueue(data_packet(9999, 1000), now).to_string(),
+    content="accepted",
+  )
+  inspect(queue.dropped_early(), content=refused_before.to_string())
+}
+
+///|
 test "coDel refuses packets while the buffer is nowhere near full" {
   // Twice as much traffic as the drain can carry, but into a buffer far larger
   // than the backlog the load builds over the interval, so nothing has to be

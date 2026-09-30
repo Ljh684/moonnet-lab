@@ -5,7 +5,7 @@
 | 参赛者 | Ljh684 |
 | 开源仓库 | https://github.com/Ljh684/moonnet-lab （公开，Apache-2.0） |
 | 语言与依赖 | MoonBit；库本身零依赖，只有命令行工具用官方扩展库 `moonbitlang/x` 读写文件 |
-| 规模 | 24 个实现文件 + 10 个测试文件，源码 8050 行、测试 2659 行，111 个测试全部通过 |
+| 规模 | 34 个 MoonBit 文件（实现 26、测试 8），源码 7757 行、测试 2523 行，113 个测试全部通过 |
 
 ## 一、项目目标与应用场景
 
@@ -29,14 +29,14 @@
 
 ## 三、验收说明
 
-本地 `moon test` 已通过 111 个测试；CI 配置逐条覆盖 F1–F7。下表里的 `moonnet` 指 `moon run cmd/moonnet --`。
+本地 `moon test` 已通过 113 个测试；CI 配置逐条覆盖 F1–F7。下表里的 `moonnet` 指 `moon run cmd/moonnet --`。
 
 | 编号 | 怎么验 | 通过标准 |
 | --- | --- | --- |
 | F1 | `moon test` 中的确定性断言 | 同一场景两次运行的报告逐字节相同 |
-| F2 | `moonnet run scenarios/bufferbloat.json`，再试 `--discipline codel` | 1500 字节 @ 10 Mbps 恰好 1.2 毫秒；最坏排队延迟 978.7 → 226.4 毫秒（同场景、同算法） |
-| F3 | `moonnet compare scenarios/long-fat.json --cc reno,cubic --seeds 3` | 1% 丢包下都完整送达 20 MB；超时 112 对 23 次 |
-| F4 | 同上，加 `moon test` 的窗口断言 | 均值 706.1 对 218.6 秒；同一串丢包下在途字节 3500 对 4000 |
+| F2 | `moonnet run scenarios/bufferbloat.json`，再试 `--discipline codel` 与 `--discipline red` | 1500 字节 @ 10 Mbps 恰好 1.2 毫秒；最坏排队延迟 978.7 → 226.4 毫秒（同场景、同算法）；RED 在该场景 11.826 秒完成、1 次超时（空闲期修正前是 49.440 秒 / 5 次） |
+| F3 | `moonnet compare scenarios/long-fat.json --cc reno,cubic --seeds 3` | 1% 丢包下都完整送达 20 MB；超时 Reno 19 次、CUBIC 7 次 |
+| F4 | 同上，加 `moon test` 的窗口断言 | 三种子均值 Reno 137.6 秒、CUBIC 151.5 秒（区间重叠）；同一串丢包下在途字节 3500 对 4000 |
 | F5 | `moonnet run scenarios/fairness.json` | 4 条流聚合 9.75 Mbps ≤ 10 Mbps 链路容量；Jain 指数 0.77–0.93 |
 | F6 | CI 在干净 runner 上跑 `moon fmt --check`、`moon check`、`moon test` 与 `list` / `compare` / `run` / `plot` | `plot` 将归档 trace JSON 生成为确定性、可解析的独立 SVG |
 | F7 | `moon run examples/embed_tcp/main`、`moon run examples/rpc_retry/main` | 两条命令各自打印结果；测试断言同一 seed 两次运行一致、重试把未送达的调用从 13/20 降到 4/20 |

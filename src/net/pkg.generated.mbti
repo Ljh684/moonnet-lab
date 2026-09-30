@@ -114,8 +114,12 @@ pub struct PacketQueue[T] {
   mut drop_next : @sim.Time
   mut drop_count : Int
   mut average_occupancy : Double
+  mut last_arrival_at : @sim.Time
+  mut last_departure_at : @sim.Time
+  mut service_time : @sim.Time
 }
 pub fn[T] PacketQueue::admitted(Self[T]) -> Int
+pub fn[T] PacketQueue::average_occupancy(Self[T]) -> Double
 pub fn[T] PacketQueue::bytes(Self[T]) -> Int
 pub fn[T] PacketQueue::dequeue(Self[T], @sim.Time) -> Packet[T]?
 pub fn[T] PacketQueue::dropped(Self[T]) -> Int

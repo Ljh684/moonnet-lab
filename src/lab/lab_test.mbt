@@ -302,6 +302,26 @@ test "tail probes prevent repeated long RTO stalls on the shallow Reno path" {
 }
 
 ///|
+test "red stops stalling once its queue has drained" {
+  let scenario = scenario_of(standing_queue_document)
+  let red = { ..scenario, uplink: { ..scenario.uplink, discipline: "red", }, }
+  let traced = @lab.run_with_trace(red)
+  // Before the idle correction this run needed 49.4 seconds for 3 MB and spent
+  // 40 of them in ten delivery stalls: RED kept refusing packets while its
+  // buffer was empty, because the average was still describing the queue that
+  // had just drained. It now finishes in about ten seconds, with nothing the
+  // diagnostics call a stall and no timeout at all.
+  inspect(
+    traced.report.delivered_bytes,
+    content=traced.report.payload_bytes.to_string(),
+  )
+  inspect(traced.report.timeouts, content="0")
+  inspect(traced.delivery_diagnostics.intervals.length(), content="0")
+  inspect(traced.report.elapsed.render(), content="5.491s")
+  inspect(traced.report.uplink_dropped_early > 0, content="true")
+}
+
+///|
 test "comparing runs every algorithm on the same scenario" {
   let scenario = scenario_of(quick_document)
   let results = @lab.compare(scenario, ["none", "reno", "cubic"])

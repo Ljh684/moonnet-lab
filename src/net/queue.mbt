@@ -158,6 +158,16 @@ pub struct PacketQueue[T] {
   mut drop_count : Int
   // RED state.
   mut average_occupancy : Double
+  /// When the previous packet arrived. RED's average is a per-packet average,
+  /// and a queue that has been quiet needs that gap folded into it; without
+  /// this the average keeps describing a backlog that has already drained.
+  mut last_arrival_at : @sim.Time
+  /// When the previous packet left, and how long a packet takes on this link,
+  /// measured as the gap between consecutive departures while the link was
+  /// busy. That measurement is what turns an idle gap into "packets that could
+  /// have arrived", which is the form Floyd's correction is written in.
+  mut last_departure_at : @sim.Time
+  mut service_time : @sim.Time
 }
 
 ///|
@@ -187,6 +197,9 @@ pub fn[T] PacketQueue::new(spec : QueueSpec, seed : UInt64) -> PacketQueue[T] {
     drop_next: @sim.Time::zero(),
     drop_count: 0,
     average_occupancy: 0.0,
+    last_arrival_at: @sim.Time::zero(),
+    last_departure_at: @sim.Time::zero(),
+    service_time: @sim.Time::zero(),
   }
 }
 
@@ -266,6 +279,16 @@ pub fn[T] PacketQueue::admitted(self : PacketQueue[T]) -> Int {
 }
 
 ///|
+/// The average occupancy RED is currently deciding from, in packets.
+///
+/// Exposed because it is the number the policy acts on: a report that shows
+/// drops without it cannot say whether the queue was standing or the average
+/// was stale. Zero for disciplines that do not keep an average.
+pub fn[T] PacketQueue::average_occupancy(self : PacketQueue[T]) -> Double {
+  self.average_occupancy
+}
+
+///|
 /// The largest occupancy seen so far, in packets and in bytes.
 pub fn[T] PacketQueue::peak(self : PacketQueue[T]) -> (Int, Int) {
   (self.peak_packets, self.peak_bytes)
@@ -307,6 +330,7 @@ pub fn[T] PacketQueue::enqueue(
   now : @sim.Time,
 ) -> Admission {
   self.observe(now)
+  self.note_arrival(now)
   if self.count >= self.spec.max_packets {
     return self.refuse(packet, DroppedPacketLimit, false)
   }
@@ -364,11 +388,10 @@ fn[T] PacketQueue::should_drop_early(
   match self.spec.discipline {
     DropTail => false
     Red(min_packets, max_packets, max_mark) => {
-      // Exponentially weighted mean occupancy, weight 0.002 as in the original
-      // description: it reacts over roughly a round trip's worth of packets
-      // rather than to a single burst.
-      self.average_occupancy = self.average_occupancy * 0.998 +
-        self.count.to_double() * 0.002
+      // The average itself is maintained by `note_arrival`, which runs on every
+      // arrival whether or not the packet fits: a policy that stopped watching
+      // the queue as soon as the buffer filled would be blind exactly when it
+      // matters. What is left here is the decision.
       let average = self.average_occupancy
       if average < min_packets.to_double() {
         false
@@ -382,6 +405,48 @@ fn[T] PacketQueue::should_drop_early(
     }
     Codel(target, interval) => self.codel_should_drop(now, target, interval)
   }
+}
+
+///|
+/// Fold the time since the previous arrival into RED's average occupancy.
+///
+/// The average is defined per arriving packet, so on its own it only decays
+/// when packets arrive. A sender that goes quiet therefore leaves the average
+/// describing a queue that no longer exists, and the next packet - arriving
+/// into an *empty* buffer - is refused because of a backlog that has drained.
+/// That is not a defect of the formula, it is a missing term: Floyd's
+/// description decays the average by `(1-w)^m`, where `m` is how many packets
+/// could have arrived during the idle gap. This computes that `m` from the
+/// link's own measured packet time rather than from a configured line rate, so
+/// the queue does not have to be told anything new.
+fn[T] PacketQueue::note_arrival(self : PacketQueue[T], now : @sim.Time) -> Unit {
+  match self.spec.discipline {
+    Red(_, _, _) => {
+      let gap = now.ps - self.last_arrival_at.ps
+      let service = self.service_time.ps
+      if service > 0L && gap > service {
+        // Repeated multiplication rather than `pow`: the same expression then
+        // evaluates to the same bits on every backend, which is the promise
+        // the rest of the project makes. The cap bounds the work a single
+        // arrival can do after an arbitrarily long quiet period.
+        let periods = gap / service
+        let capped = if periods > 4096L { 4096L } else { periods }
+        let mut index = 0L
+        while index < capped {
+          self.average_occupancy = self.average_occupancy * 0.998
+          index = index + 1L
+        }
+      }
+      // Exponentially weighted mean occupancy, weight 0.002 as in the original
+      // description: it reacts over roughly a round trip's worth of packets
+      // rather than to a single burst. The idle decay above is the same term
+      // Floyd writes as `(1-w)^m`.
+      self.average_occupancy = self.average_occupancy * 0.998 +
+        self.count.to_double() * 0.002
+    }
+    _ => ()
+  }
+  self.last_arrival_at = now
 }
 
 ///|
@@ -477,6 +542,19 @@ pub fn[T] PacketQueue::dequeue(
   self.slots[self.head] = None
   self.head = (self.head + 1) % self.slots.length()
   self.count = self.count - 1
+  // While packets are still waiting behind this one, the link is saturated and
+  // the gap between two departures is exactly one packet's serialisation time.
+  // Measuring it here is what lets RED's idle correction speak in packets
+  // without anyone configuring a bandwidth.
+  let departure_gap = now.ps - self.last_departure_at.ps
+  if self.count > 0 && self.last_departure_at.ps > 0L && departure_gap > 0L {
+    self.service_time = if self.service_time.ps == 0L {
+      @sim.Time::from_ps(departure_gap)
+    } else {
+      @sim.Time::from_ps((self.service_time.ps * 3L + departure_gap) / 4L)
+    }
+  }
+  self.last_departure_at = now
   match entry {
     None => None
     Some(value) => {
