@@ -479,7 +479,46 @@ test "a burst of losses is repaired by partial acknowledgments" {
 }
 
 ///|
-test "two duplicate acknowledgments are not enough to retransmit" {
+test "a tail loss probe repairs consecutive losses before RTO backoff" {
+  let sim = @sim.Sim::new(1UL)
+  let client = @tcp.TcpConnection::new(
+    @tcp.TcpConfig::new(1000, 8192, 1000U).with_rto(
+      @sim.Time::from_ms(200L),
+      @sim.Time::from_ms(200L),
+      @sim.Time::from_s(60L),
+    ),
+  )
+  let server = @tcp.TcpConnection::new(
+    @tcp.TcpConfig::new(1000, 8192, 5000U).with_rto(
+      @sim.Time::from_ms(200L),
+      @sim.Time::from_ms(200L),
+      @sim.Time::from_s(60L),
+    ),
+  )
+  // The last two data segments in the initial flight are dropped. They produce
+  // no duplicate ACKs because nothing later arrives to expose the holes.
+  wire_loopback(sim, client, server, @sim.Time::from_ms(25L), DropRange(7, 8))
+  server.listen()
+  client.connect(sim)
+  sim.run()
+  let payload = pattern_bytes(8000)
+  let sent_at = sim.now()
+  client.send(sim, payload)
+  inspect(
+    sim.step_until(() => server.delivered_bytes() == payload.length()),
+    content="true",
+  )
+  // A probe reaches the receiver after two measured round trips, and its
+  // duplicate ACK lets NewReno repair both holes without any RTO expiry.
+  inspect((sim.now() - sent_at).ps < 300_000_000_000L, content="true")
+  inspect(client.tlp_probes() > 0, content="true")
+  inspect(client.fast_retransmits() > 0, content="true")
+  inspect(client.timeouts(), content="0")
+  inspect(server.delivered() == payload, content="true")
+}
+
+///|
+test "two duplicate acknowledgments wait for a tail probe before recovery" {
   let sim = @sim.Sim::new(1UL)
   let client = @tcp.TcpConnection::new(
     fast_rto_config(1000, 8192, 1000U, @sim.Time::from_ms(50L)),
@@ -488,16 +527,18 @@ test "two duplicate acknowledgments are not enough to retransmit" {
     fast_rto_config(1000, 8192, 5000U, @sim.Time::from_ms(50L)),
   )
   // With only four segments in the window, one loss produces two duplicate
-  // acknowledgments: not enough evidence, so the timer has to do the work.
+  // acknowledgments. The tail probe supplies one more ACK without waiting for
+  // the retransmission timer.
   wire_loopback(sim, client, server, @sim.Time::from_ms(5L), DropNth(2))
   server.listen()
   client.connect(sim)
   sim.run()
   client.send(sim, pattern_bytes(4000))
   sim.run()
-  inspect(client.fast_retransmits(), content="0")
-  inspect(client.timeouts(), content="1")
-  inspect(client.retransmits(), content="1")
+  inspect(client.tlp_probes(), content="1")
+  inspect(client.fast_retransmits(), content="1")
+  inspect(client.timeouts(), content="0")
+  inspect(client.retransmits(), content="2")
 }
 
 ///|
@@ -526,7 +567,7 @@ test "the round trip estimate converges on the path delay" {
 }
 
 ///|
-test "a lost data segment is retransmitted and the transfer completes" {
+test "a lost data segment is recovered by a tail probe when duplicate ACKs are sparse" {
   let sim = @sim.Sim::new(1UL)
   let client = @tcp.TcpConnection::new(
     fast_rto_config(1000, 8192, 1000U, @sim.Time::from_ms(50L)),
@@ -542,14 +583,14 @@ test "a lost data segment is retransmitted and the transfer completes" {
   let payload = pattern_bytes(4000)
   client.send(sim, payload)
   sim.run()
-  inspect(client.timeouts(), content="1")
-  inspect(client.retransmits(), content="1")
+  inspect(client.tlp_probes(), content="1")
+  inspect(client.timeouts(), content="0")
+  inspect(client.retransmits(), content="2")
   inspect(server.delivered() == payload, content="true")
   inspect(client.bytes_acked(), content="4000")
-  // The handshake and the first data segment already measured the path, so the
-  // timer was at 25 ms (10 ms smoothed, 3.75 ms variance) when the loss was
-  // discovered, and backoff doubled it to 50 ms.
-  inspect(client.rto().render(), content="50.000ms")
+  // The handshake and first data segment measured the path. The tail probe
+  // repairs the loss, so no RTO backoff is applied to the 25 ms estimate.
+  inspect(client.rto().render(), content="25.000ms")
 }
 
 ///|
@@ -618,10 +659,10 @@ test "consecutive timeouts back off exponentially and then give up" {
   sim.run()
   client.send(sim, pattern_bytes(1000))
   sim.run()
-  // Eight retransmissions, each waiting twice as long as the last, and then the
-  // connection gives up rather than retrying forever.
+  // One tail probe plus eight timer retransmissions, each waiting twice as long,
+  // then the connection gives up rather than retrying forever.
   inspect(client.timeouts(), content="9")
-  inspect(client.retransmits(), content="8")
+  inspect(client.retransmits(), content="9")
   inspect(client.state().render(), content="CLOSED")
   // Eight doublings from the 30 ms the path measurement produced.
   inspect(client.rto().render(), content="7.680s")

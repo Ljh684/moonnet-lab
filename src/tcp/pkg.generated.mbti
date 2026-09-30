@@ -159,6 +159,11 @@ pub struct TcpConnection {
   mut rto : @sim.Time
   mut timer_running : Bool
   mut timer_generation : Int
+  mut tlp_probe_pending : Bool
+  mut tlp_probe_end : Seq?
+  mut tlp_probes : Int
+  mut tlp_timer_running : Bool
+  mut tlp_timer_generation : Int
 }
 pub fn TcpConnection::bytes_acked(Self) -> Int
 pub fn TcpConnection::bytes_sent(Self) -> Int
@@ -196,6 +201,7 @@ pub fn TcpConnection::ssthresh(Self) -> Int
 pub fn TcpConnection::state(Self) -> TcpState
 pub fn TcpConnection::timeouts(Self) -> Int
 pub fn TcpConnection::timer_running(Self) -> Bool
+pub fn TcpConnection::tlp_probes(Self) -> Int
 
 pub(all) enum TcpState {
   Closed

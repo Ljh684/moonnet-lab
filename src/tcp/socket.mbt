@@ -216,6 +216,13 @@ pub struct TcpConnection {
   /// Without this, a timer that fires after an acknowledgment would retransmit
   /// data that has already arrived.
   mut timer_generation : Int
+  /// A tail-loss probe is outstanding until an acknowledgment covers it or a
+  /// duplicate ACK proves that later data reached the receiver out of order.
+  mut tlp_probe_pending : Bool
+  mut tlp_probe_end : Seq?
+  mut tlp_probes : Int
+  mut tlp_timer_running : Bool
+  mut tlp_timer_generation : Int
 }
 
 ///|
@@ -281,6 +288,11 @@ pub fn TcpConnection::new_with_cc(
     rto: config.rto_initial,
     timer_running: false,
     timer_generation: 0,
+    tlp_probe_pending: false,
+    tlp_probe_end: None,
+    tlp_probes: 0,
+    tlp_timer_running: false,
+    tlp_timer_generation: 0,
   }
 }
 
@@ -524,6 +536,14 @@ fn TcpConnection::process_ack(
   }
   let old_una = self.snd_una
   self.snd_una = ack
+  match self.tlp_probe_end {
+    None => ()
+    Some(probe_end) =>
+      if !ack.before(probe_end) {
+        self.tlp_probe_pending = false
+        self.tlp_probe_end = None
+      }
+  }
   // Karn's algorithm: the acknowledgment covers the byte range, not a copy of
   // it, so a segment that had to be sent twice yields no usable round-trip
   // sample.
@@ -594,6 +614,7 @@ fn TcpConnection::process_ack(
   self.consecutive_timeouts = 0
   if self.inflight_is_empty() {
     self.disarm_timer()
+    self.disarm_tlp_timer()
   } else {
     self.arm_timer(sim)
   }
@@ -622,7 +643,20 @@ fn TcpConnection::on_duplicate_ack(
   self : TcpConnection,
   sim : @sim.Sim,
 ) -> Unit {
-  if self.dup_ack_count < 3 || self.inflight_is_empty() {
+  if self.inflight_is_empty() {
+    return
+  }
+  // The probe is deliberately sent at the end of a quiet flight. A duplicate
+  // ACK for it proves that later data reached the receiver, so the oldest hole
+  // can be repaired without waiting for three more packets (which may never be
+  // sent in an application-limited flight).
+  if self.tlp_probe_pending {
+    self.tlp_probe_pending = false
+    self.tlp_probe_end = None
+    self.start_fast_recovery(sim)
+    return
+  }
+  if self.dup_ack_count < 3 {
     return
   }
   if self.in_recovery {
@@ -634,10 +668,21 @@ fn TcpConnection::on_duplicate_ack(
     self.record_trace(sim, "duplicate_ack")
     return
   }
+  self.start_fast_recovery(sim)
+}
+
+///|
+/// Enter fast recovery after either the duplicate-ACK threshold or a tail probe
+/// has supplied evidence that a later segment passed the missing one.
+fn TcpConnection::start_fast_recovery(
+  self : TcpConnection,
+  sim : @sim.Sim,
+) -> Unit {
   let flight_size = self.snd_una.distance_to(self.snd_nxt)
   self.in_recovery = true
   self.recover_until = self.snd_nxt
   self.cc.on_fast_retransmit(flight_size, self.config.mss)
+  self.disarm_tlp_timer()
   self.record_trace(sim, "fast_retransmit")
   self.retransmit_oldest(sim)
   self.fast_retransmits = self.fast_retransmits + 1
@@ -709,6 +754,83 @@ fn TcpConnection::disarm_timer(self : TcpConnection) -> Unit {
 }
 
 ///|
+/// Schedule one tail probe before the ordinary retransmission timeout.
+///
+/// Two smoothed round trips give the ACK clock a chance to report normal
+/// progress before the probe. The probe never extends beyond the existing RTO,
+/// which remains the fallback if the probe or its ACK is lost.
+fn TcpConnection::arm_tlp_timer(self : TcpConnection, sim : @sim.Sim) -> Unit {
+  if self.state != Established ||
+    self.inflight_is_empty() ||
+    self.in_recovery ||
+    self.tlp_probe_pending ||
+    !self.has_rtt_sample {
+    return
+  }
+  self.tlp_timer_generation = self.tlp_timer_generation + 1
+  let generation = self.tlp_timer_generation
+  let two_srtt = (self.srtt_ps * 2.0).to_int64()
+  let delay_ps = if two_srtt < self.rto.ps { two_srtt } else { self.rto.ps }
+  self.tlp_timer_running = true
+  let connection = self
+  sim.after(@sim.Time::from_ps(delay_ps), "tail loss probe", () => {
+    connection.on_tlp_timeout(sim, generation)
+  })
+}
+
+///|
+/// Invalidate any scheduled tail probe.
+fn TcpConnection::disarm_tlp_timer(self : TcpConnection) -> Unit {
+  self.tlp_timer_running = false
+  self.tlp_timer_generation = self.tlp_timer_generation + 1
+}
+
+///|
+/// Send one new segment or retransmit the highest outstanding segment to
+/// solicit acknowledgment feedback before the RTO.
+fn TcpConnection::on_tlp_timeout(
+  self : TcpConnection,
+  sim : @sim.Sim,
+  generation : Int,
+) -> Unit {
+  if generation != self.tlp_timer_generation || !self.tlp_timer_running {
+    return
+  }
+  self.tlp_timer_running = false
+  if self.state != Established ||
+    self.in_recovery ||
+    self.inflight_is_empty() ||
+    self.tlp_probe_pending {
+    return
+  }
+  self.tlp_probe_pending = true
+  self.tlp_probes = self.tlp_probes + 1
+  self.record_trace(sim, "tail_probe")
+  let queued = self.send_queue.length() - self.send_offset
+  let in_flight = self.snd_una.distance_to(self.snd_nxt)
+  let receive_allowance = self.peer_window - in_flight
+  if queued > 0 && receive_allowance > 0 {
+    let mut take = self.config.mss
+    if take > queued {
+      take = queued
+    }
+    if take > receive_allowance {
+      take = receive_allowance
+    }
+    let payload = bytes_slice(self.send_queue, self.send_offset, take)
+    self.send_data(sim, payload)
+    self.send_offset = self.send_offset + take
+    self.tlp_probe_end = Some(self.snd_nxt)
+  } else {
+    let index = self.inflight.length() - 1
+    let entry = self.inflight[index]
+    self.tlp_probe_end = Some(entry.seq.advance(entry.sequence_length))
+    self.retransmit_at(sim, index)
+    self.arm_timer(sim)
+  }
+}
+
+///|
 /// The retransmission timer fired.
 fn TcpConnection::on_timeout(
   self : TcpConnection,
@@ -722,6 +844,9 @@ fn TcpConnection::on_timeout(
     self.timer_running = false
     return
   }
+  self.disarm_tlp_timer()
+  self.tlp_probe_pending = false
+  self.tlp_probe_end = None
   let flight_size = self.snd_una.distance_to(self.snd_nxt)
   self.cc.on_timeout(flight_size, self.config.mss)
   self.timeouts = self.timeouts + 1
@@ -766,7 +891,20 @@ fn TcpConnection::retransmit_oldest(
   if self.inflight_is_empty() {
     return
   }
-  let entry = self.inflight[self.inflight_head]
+  self.retransmit_at(sim, self.inflight_head)
+}
+
+///|
+/// Retransmit one retained segment by index.
+fn TcpConnection::retransmit_at(
+  self : TcpConnection,
+  sim : @sim.Sim,
+  index : Int,
+) -> Unit {
+  if index < self.inflight_head || index >= self.inflight.length() {
+    return
+  }
+  let entry = self.inflight[index]
   let transmissions = entry.transmissions + 1
   let segment = Segment::new(
     entry.seq,
@@ -776,7 +914,7 @@ fn TcpConnection::retransmit_oldest(
     entry.payload,
     self.tag_for(entry.seq, transmissions),
   )
-  self.inflight[self.inflight_head] = {
+  self.inflight[index] = {
     ..entry,
     sent_at: sim.now(),
     retransmitted: true,
@@ -843,6 +981,7 @@ fn TcpConnection::pump(self : TcpConnection, sim : @sim.Sim) -> Unit {
     self.send_data(sim, payload)
     self.send_offset = self.send_offset + take
   }
+  self.arm_tlp_timer(sim)
 }
 
 ///|
@@ -1216,6 +1355,12 @@ pub fn TcpConnection::retransmits(self : TcpConnection) -> Int {
 /// without waiting for the timer.
 pub fn TcpConnection::fast_retransmits(self : TcpConnection) -> Int {
   self.fast_retransmits
+}
+
+///|
+/// How many tail-loss probes this connection has sent.
+pub fn TcpConnection::tlp_probes(self : TcpConnection) -> Int {
+  self.tlp_probes
 }
 
 ///|

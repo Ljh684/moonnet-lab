@@ -262,6 +262,38 @@ let quick_document : String =
   #|}
 
 ///|
+/// The loss-free Reno regression that used to need 10,047 seconds because
+/// drop-tail congestion created a run of tail losses with no ACK feedback.
+let shallow_reno_document : String =
+  #|{
+  #|  "name": "shallow buffer Reno tail-loss recovery",
+  #|  "seed": 9,
+  #|  "payload_bytes": 3000000,
+  #|  "algorithm": "reno",
+  #|  "uplink": { "bandwidth_bps": 5000000, "delay_ms": 10, "loss": 0.0, "queue_packets": 64 },
+  #|  "downlink": { "bandwidth_bps": 5000000, "delay_ms": 10, "loss": 0.0, "queue_packets": 64 },
+  #|  "client": { "mss": 1000, "receive_window": 1000000, "initial_seq": 1000 },
+  #|  "server": { "mss": 1000, "receive_window": 2000000, "initial_seq": 5000 }
+  #|}
+
+///|
+test "tail probes prevent repeated long RTO stalls on the shallow Reno path" {
+  let scenario = scenario_of(shallow_reno_document)
+  let first = @lab.run_with_trace(scenario)
+  let second = @lab.run_with_trace(scenario)
+  inspect(first.report.delivered_bytes, content="3000000")
+  inspect(first.report.elapsed.ps < 30_000_000_000_000L, content="true")
+  inspect(first.report.timeouts <= 4, content="true")
+  inspect(first.max_delivery_gap.ps < 2_000_000_000_000L, content="true")
+  inspect(first.events.join("\n").contains("|tail_probe|"), content="true")
+  inspect(
+    first.report.to_json_text() == second.report.to_json_text(),
+    content="true",
+  )
+  inspect(first.events.join("\n") == second.events.join("\n"), content="true")
+}
+
+///|
 test "comparing runs every algorithm on the same scenario" {
   let scenario = scenario_of(quick_document)
   let results = @lab.compare(scenario, ["none", "reno", "cubic"])
