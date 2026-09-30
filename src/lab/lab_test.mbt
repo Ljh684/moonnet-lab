@@ -401,6 +401,136 @@ test "a sweep field changes the parameter it names, in both directions" {
 }
 
 ///|
+test "queue_packets sweep requires distinct positive integer capacities" {
+  let field = @lab.SweepField::parse("queue_packets").unwrap()
+  inspect(field.render(), content="queue_packets")
+  inspect(field.validate_range(16.0, 40.0, 4) is Ok(_), content="true")
+  inspect(field.validate_range(40.0, 16.0, 4) is Ok(_), content="true")
+  inspect(field.validate_range(16.5, 40.0, 4) is Err(_), content="true")
+  inspect(field.validate_range(0.0, 40.0, 4) is Err(_), content="true")
+  inspect(field.validate_range(16.0, 18.0, 4) is Err(_), content="true")
+  inspect(field.validate_range(16.0, 40.0, 1) is Err(_), content="true")
+  inspect(field.validate_range(16.0, 16.0, 1) is Ok(_), content="true")
+  let descending = @lab.sweep(
+    scenario_of(quick_document),
+    field,
+    40.0,
+    16.0,
+    4,
+    ["reno"],
+  )
+  inspect(descending[0].value, content="40")
+  inspect(descending[1].value, content="32")
+  inspect(descending[2].value, content="24")
+  inspect(descending[3].value, content="16")
+}
+
+///|
+test "queue_packets sweep reports reproducible per-seed queue measurements" {
+  let scenario = scenario_of(quick_document)
+  let field = @lab.SweepField::QueuePackets
+  let widened = field.apply(scenario, 40.0)
+  inspect(widened.uplink.queue_packets, content="40")
+  inspect(widened.downlink.queue_packets, content="40")
+  inspect(widened.uplink.bandwidth_bps, content="10000000")
+  inspect(widened.uplink.delay.render(), content="5.000ms")
+  inspect(widened.uplink.loss, content="0.01")
+
+  let first_report = @lab.run({
+    ..scenario,
+    algorithm: "reno",
+    seed: scenario.seed,
+  })
+  let second_report = @lab.run({
+    ..scenario,
+    algorithm: "reno",
+    seed: scenario.seed + 1UL,
+  })
+  let summary = @lab.summarise(scenario, "reno", 2)
+  inspect(
+    summary.mean_queue_packets ==
+    (first_report.mean_queue_packets + second_report.mean_queue_packets) / 2.0,
+    content="true",
+  )
+  inspect(
+    summary.mean_max_sojourn.ps ==
+    (first_report.max_sojourn.ps + second_report.max_sojourn.ps) / 2L,
+    content="true",
+  )
+  inspect(
+    summary.worst_max_sojourn.ps ==
+    (if first_report.max_sojourn.ps > second_report.max_sojourn.ps {
+      first_report.max_sojourn.ps
+    } else {
+      second_report.max_sojourn.ps
+    }),
+    content="true",
+  )
+
+  let rows = @lab.sweep(scenario, field, 16.0, 40.0, 4, ["reno"], seeds=2)
+  inspect(rows.length(), content="4")
+  inspect(rows[0].value, content="16")
+  inspect(rows[1].value, content="24")
+  inspect(rows[2].value, content="32")
+  inspect(rows[3].value, content="40")
+  for row in rows {
+    inspect(row.results[0].1.runs, content="2")
+    inspect(row.results[0].1.delivered_bytes, content="120000")
+    inspect(row.results[0].1.mean_queue_packets >= 0.0, content="true")
+    inspect(row.results[0].1.mean_max_sojourn.ps >= 0L, content="true")
+    inspect(row.results[0].1.worst_max_sojourn.ps >= 0L, content="true")
+  }
+
+  let first_json = @lab.sweep_json(scenario, field, rows, ["reno"], seeds=2)
+  let repeated_rows = @lab.sweep(
+    scenario,
+    field,
+    16.0,
+    40.0,
+    4,
+    ["reno"],
+    seeds=2,
+  )
+  let second_json = @lab.sweep_json(
+    scenario,
+    field,
+    repeated_rows,
+    ["reno"],
+    seeds=2,
+  )
+  inspect(first_json == second_json, content="true")
+  let document = match @json.parse(first_json) {
+    Ok(value) => value
+    Err(message) => abort("the queue sweep is not valid JSON: " + message)
+  }
+  inspect(
+    document.field("field").unwrap().as_text().unwrap(),
+    content="queue_packets",
+  )
+  inspect(
+    document.field("rows").unwrap().as_list().unwrap()[0]
+    .field("queue_packets")
+    .unwrap()
+    .as_number()
+    .unwrap(),
+    content="16",
+  )
+  let first_result = document.field("rows").unwrap().as_list().unwrap()[0]
+    .field("results")
+    .unwrap()
+    .as_list()
+    .unwrap()[0]
+  inspect(first_result.field("mean_queue_packets") is Some(_), content="true")
+  inspect(first_result.field("mean_max_sojourn_ms") is Some(_), content="true")
+  inspect(first_result.field("worst_max_sojourn_ms") is Some(_), content="true")
+
+  let lines = @lab.sweep_lines(scenario, field, rows, ["reno"])
+  inspect(lines.contains("queue metrics (uplink"), content="true")
+  inspect(lines.contains("mean max ms"), content="true")
+  inspect(lines.contains("worst max ms"), content="true")
+}
+
+///|
 test "a sweep runs once per value and reports the value it used" {
   let scenario = scenario_of(quick_document)
   let field = @lab.SweepField::Loss

@@ -8,6 +8,7 @@ pub(all) enum SweepField {
   Loss
   DelayMs
   BandwidthMbps
+  QueuePackets
   Seed
 }
 
@@ -17,12 +18,13 @@ pub fn SweepField::parse(name : String) -> Result[SweepField, String] {
     "loss" => Ok(Loss)
     "delay_ms" => Ok(DelayMs)
     "bandwidth_mbps" => Ok(BandwidthMbps)
+    "queue_packets" => Ok(QueuePackets)
     "seed" => Ok(Seed)
     _ =>
       Err(
         "unknown sweep field \"" +
         name +
-        "\"; expected one of: loss, delay_ms, bandwidth_mbps, seed",
+        "\"; expected one of: loss, delay_ms, bandwidth_mbps, queue_packets, seed",
       )
   }
 }
@@ -33,7 +35,61 @@ pub fn SweepField::render(self : SweepField) -> String {
     Loss => "loss"
     DelayMs => "delay_ms"
     BandwidthMbps => "bandwidth_mbps"
+    QueuePackets => "queue_packets"
     Seed => "seed"
+  }
+}
+
+///|
+/// Check that a requested sweep range is usable for its field.
+///
+/// Queue capacities are positive integers. Their inclusive range must contain
+/// at least as many values as requested steps, so every row has a distinct
+/// capacity and both endpoints are represented. Library callers should run
+/// this check before passing a `QueuePackets` range to `sweep`.
+pub fn SweepField::validate_range(
+  self : SweepField,
+  from : Double,
+  to : Double,
+  steps : Int,
+) -> Result[Unit, String] {
+  match self {
+    QueuePackets => {
+      if steps < 1 {
+        return Err("queue_packets sweep steps must be at least 1")
+      }
+      if from < 1.0 ||
+        to < 1.0 ||
+        from != from ||
+        to != to ||
+        from > 2_147_483_647.0 ||
+        to > 2_147_483_647.0 ||
+        from != from.to_int().to_double() ||
+        to != to.to_int().to_double() {
+        return Err(
+          "queue_packets sweep endpoints must be positive whole numbers within the Int range",
+        )
+      }
+      let first = from.to_int()
+      let last = to.to_int()
+      let capacity_count = if first > last {
+        first - last + 1
+      } else {
+        last - first + 1
+      }
+      if steps > capacity_count {
+        Err(
+          "queue_packets sweep steps exceed the number of distinct capacities in the inclusive range",
+        )
+      } else if steps == 1 && first != last {
+        Err(
+          "queue_packets sweep needs at least 2 steps to include both endpoints",
+        )
+      } else {
+        Ok(())
+      }
+    }
+    _ => Ok(())
   }
 }
 
@@ -69,6 +125,15 @@ pub fn SweepField::apply(
         downlink: {
           ..scenario.downlink,
           bandwidth_bps: (value * 1_000_000.0).to_int64(),
+        },
+      }
+    QueuePackets =>
+      {
+        ..scenario,
+        uplink: { ..scenario.uplink, queue_packets: (value + 0.5).to_int(), },
+        downlink: {
+          ..scenario.downlink,
+          queue_packets: (value + 0.5).to_int(),
         },
       }
     Seed => { ..scenario, seed: value.to_int64().reinterpret_as_uint64(), }
@@ -110,6 +175,12 @@ pub(all) struct RunSummary {
   min_elapsed : @sim.Time
   max_elapsed : @sim.Time
   mean_throughput_kbps : Double
+  /// Mean time-weighted uplink occupancy, averaged across runs.
+  mean_queue_packets : Double
+  /// Mean of each run's maximum uplink queue wait.
+  mean_max_sojourn : @sim.Time
+  /// Largest uplink queue wait observed in any run.
+  worst_max_sojourn : @sim.Time
   /// Totals across the runs, not averages: these are counts of things that
   /// happened.
   retransmits : Int
@@ -129,6 +200,9 @@ pub fn summarise(
   let mut total = 0L
   let mut fastest = 0L
   let mut slowest = 0L
+  let mut total_queue_packets = 0.0
+  let mut total_max_sojourn = 0L
+  let mut worst_max_sojourn = 0L
   let mut retransmits = 0
   let mut fast_retransmits = 0
   let mut timeouts = 0
@@ -149,6 +223,11 @@ pub fn summarise(
     if index == 0 || elapsed > slowest {
       slowest = elapsed
     }
+    total_queue_packets = total_queue_packets + report.mean_queue_packets
+    total_max_sojourn = total_max_sojourn + report.max_sojourn.ps
+    if report.max_sojourn.ps > worst_max_sojourn {
+      worst_max_sojourn = report.max_sojourn.ps
+    }
     retransmits = retransmits + report.retransmits
     fast_retransmits = fast_retransmits + report.fast_retransmits
     timeouts = timeouts + report.timeouts
@@ -168,6 +247,9 @@ pub fn summarise(
     } else {
       scenario.payload_bytes.to_double() * 8.0 / seconds / 1000.0
     },
+    mean_queue_packets: total_queue_packets / count.to_double(),
+    mean_max_sojourn: @sim.Time::from_ps(total_max_sojourn / count.to_int64()),
+    worst_max_sojourn: @sim.Time::from_ps(worst_max_sojourn),
     retransmits,
     fast_retransmits,
     timeouts,
@@ -217,7 +299,13 @@ pub fn sweep(
   seeds? : Int = 1,
 ) -> Array[SweepRow] {
   let rows : Array[SweepRow] = []
-  for value in sweep_values(from, to, steps) {
+  for raw_value in sweep_values(from, to, steps) {
+    // Queue capacities are integers. The CLI validates ranges to ensure that
+    // rounding still gives distinct values and keeps both endpoints.
+    let value = match field {
+      QueuePackets => (raw_value + 0.5).to_int().to_double()
+      _ => raw_value
+    }
     rows.push({
       value,
       results: compare(field.apply(scenario, value), algorithms, seeds~),
@@ -314,7 +402,8 @@ pub fn compare_lines(
   ")\n\n" +
   render_table(
     [
-      "algorithm", "mean", "fastest", "slowest", "throughput", "retransmits", "timeouts",
+      "algorithm", "mean", "fastest", "slowest", "throughput", "mean queue pkts",
+      "mean max wait", "worst max wait", "retransmits", "timeouts",
     ],
     rows,
   ) +
@@ -366,7 +455,57 @@ pub fn sweep_lines(
   render_table(
     time_header(field, algorithms),
     sweep_time_rows(rows, field, algorithms),
+  ) +
+  "\n\nqueue metrics (uplink; mean max wait averages each run's maximum):\n" +
+  render_table(
+    queue_header(field, algorithms),
+    sweep_queue_rows(rows, field, algorithms),
   )
+}
+
+///|
+fn queue_header(
+  field : SweepField,
+  algorithms : Array[String],
+) -> Array[String] {
+  let header : Array[String] = [field.render()]
+  for name in algorithms {
+    header.push(name + " mean pkts")
+    header.push(name + " mean max ms")
+    header.push(name + " worst max ms")
+  }
+  header
+}
+
+///|
+fn sweep_queue_rows(
+  rows : Array[SweepRow],
+  field : SweepField,
+  algorithms : Array[String],
+) -> Array[Array[String]] {
+  let table : Array[Array[String]] = []
+  for row in rows {
+    let cells : Array[String] = [format_value(field, row.value)]
+    for name in algorithms {
+      let mut found = false
+      for entry in row.results {
+        if entry.0 == name {
+          cells.push(format_fixed(entry.1.mean_queue_packets, 1))
+          cells.push(format_fixed(entry.1.mean_max_sojourn.to_ms_f(), 3))
+          cells.push(format_fixed(entry.1.worst_max_sojourn.to_ms_f(), 3))
+          found = true
+          break
+        }
+      }
+      if !found {
+        cells.push("-")
+        cells.push("-")
+        cells.push("-")
+      }
+    }
+    table.push(cells)
+  }
+  table
 }
 
 ///|
@@ -403,6 +542,9 @@ fn report_row(name : String, summary : RunSummary) -> Array[String] {
     summary.min_elapsed.render(),
     summary.max_elapsed.render(),
     format_fixed(summary.mean_throughput_kbps, 1),
+    format_fixed(summary.mean_queue_packets, 1),
+    summary.mean_max_sojourn.render(),
+    summary.worst_max_sojourn.render(),
     summary.retransmits.to_string(),
     summary.timeouts.to_string(),
   ]
@@ -435,6 +577,7 @@ fn elapsed_of(results : Array[(String, RunSummary)], name : String) -> String {
 fn format_value(field : SweepField, value : Double) -> String {
   match field {
     Loss => format_fixed(value, 4)
+    QueuePackets => value.to_int().to_string()
     Seed => value.to_int64().to_string()
     _ => format_fixed(value, 1)
   }
@@ -493,9 +636,13 @@ pub fn sweep_json(
 ) -> String {
   let entries : Array[String] = []
   for row in rows {
+    let value_text = match field {
+      QueuePackets => format_value(field, row.value)
+      _ => format_fixed(row.value, 6)
+    }
     entries.push(
       @json.object_of_texts([
-        (field.render(), format_fixed(row.value, 6)),
+        (field.render(), value_text),
         ("algorithms", @json.array_of_texts(quoted(algorithms))),
         ("results", @json.array_of_texts(summaries_json(row.results))),
       ]),

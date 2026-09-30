@@ -274,6 +274,15 @@ pub fn RunSummary::to_json_text(self : RunSummary) -> String {
       "mean_throughput_kbps",
       @json.Json::Number(self.mean_throughput_kbps).render(),
     ),
+    ("mean_queue_packets", @json.Json::Number(self.mean_queue_packets).render()),
+    (
+      "mean_max_sojourn_ms",
+      @json.Json::Number(self.mean_max_sojourn.to_ms_f()).render(),
+    ),
+    (
+      "worst_max_sojourn_ms",
+      @json.Json::Number(self.worst_max_sojourn.to_ms_f()).render(),
+    ),
     ("retransmits", self.retransmits.to_string()),
     ("fast_retransmits", self.fast_retransmits.to_string()),
     ("timeouts", self.timeouts.to_string()),

@@ -45,11 +45,14 @@ moon run cmd/moonnet -- run scenarios/long-fat.json --cc cubic
 moon run cmd/moonnet -- run scenarios/bufferbloat-shallow.json --cc reno --trace --json > trace.json
 moon run cmd/moonnet -- compare scenarios/long-fat.json --cc reno,cubic
 moon run cmd/moonnet -- sweep scenarios/small-buffers.json --field loss --from 0 --to 0.02 --steps 5
+moon run cmd/moonnet -- sweep scenarios/bufferbloat.json --field queue_packets --from 16 --to 600 --steps 5 --cc reno,cubic --seeds 3
 moon run cmd/moonnet -- run scenarios/fairness.json   # 多条流抢一条链路
 moon run cmd/moonnet -- run scenarios/bufferbloat.json --discipline codel
 ```
 
 命令只有五个，每个都对应一份可编辑的场景文件。**五个子命令就是全部接口**：一件事只有一种做法。
+
+`sweep --field queue_packets` 会把上下行缓冲区设为同一容量并扫描指定范围。`--from` 和 `--to` 必须是正整数；`--steps` 包含两端点，不能超过范围内不同容量的数量。中间点按等距插值后四舍五入到整数。结果除了吞吐和耗时，还汇总上行队列的平均占用、每次运行最大等待时间的跨种子均值，以及所有种子里的最坏等待时间；文本和 JSON 都包含这些指标。均值队列占用按每次运行实际测量时长计算，不把连接结束后的空队列时间计入。
 
 单流场景可用 `--trace` 保留 TCP 状态与队列轨迹。与 `--json` 一起使用时，会输出普通报告、事件轨迹和 `delivery_diagnostics`：把超过 `max(2 × SRTT, 1 ms)` 的连续交付间隔列为停顿，汇总次数、累计时长和最长时长，并为每段标出期间是否观察到排队、重传/恢复事件或发送窗口阻塞。三种信号可以重叠，代表区间内出现过的证据，不把相关性冒充成单一因果。轨迹记录发送、确认、重传、尾部探测和超时时的拥塞窗口、阈值、在途字节、平滑 RTT、RTO，以及上下行队列的包数、字节数和丢弃计数。多流轨迹暂不支持。
 
@@ -353,7 +356,7 @@ MoonBit 生态里已经有几款通用离散事件仿真引擎，也有 pcap 与
 
 ## English summary
 
-moonnet-lab is a deterministic packet-level network simulator and TCP congestion-control laboratory written in MoonBit, with no third-party dependencies. Given a topology, a traffic pattern and a seed, a run produces byte-identical event ordering, random draws and metrics. Virtual time is an exact integer in picoseconds, events are ordered by `(time, arrival sequence)`, and the PRNG is frozen with pinned reference vectors. The kernel, the link layer with three queue disciplines (drop-tail, RED, CoDel), the TCP stack with Reno and CUBIC, and the experiment layer (scenarios, comparison, sweep, fairness) are complete and tested; 102 tests pass on a clean runner. The command line tool is one consumer of the library: the two packages under `examples/` are consumers that never touch it, and [docs/api.md](docs/api.md) states what a downstream project may rely on and what is an implementation detail.
+moonnet-lab is a deterministic packet-level network simulator and TCP congestion-control laboratory written in MoonBit, with no third-party dependencies. Given a topology, a traffic pattern and a seed, a run produces byte-identical event ordering, random draws and metrics. Virtual time is an exact integer in picoseconds, events are ordered by `(time, arrival sequence)`, and the PRNG is frozen with pinned reference vectors. The kernel, the link layer with three queue disciplines (drop-tail, RED, CoDel), the TCP stack with Reno and CUBIC, and the experiment layer (scenarios, comparison, sweep, fairness) are covered by the test suite. The command line tool is one consumer of the library: the two packages under `examples/` are consumers that never touch it, and [docs/api.md](docs/api.md) states what a downstream project may rely on and what is an implementation detail.
 
 ## License
 

@@ -143,6 +143,9 @@ pub(all) struct RunSummary {
   min_elapsed : @sim.Time
   max_elapsed : @sim.Time
   mean_throughput_kbps : Double
+  mean_queue_packets : Double
+  mean_max_sojourn : @sim.Time
+  worst_max_sojourn : @sim.Time
   retransmits : Int
   fast_retransmits : Int
   timeouts : Int
@@ -169,11 +172,13 @@ pub(all) enum SweepField {
   Loss
   DelayMs
   BandwidthMbps
+  QueuePackets
   Seed
 }
 pub fn SweepField::apply(Self, Scenario, Double) -> Scenario
 pub fn SweepField::parse(String) -> Result[Self, String]
 pub fn SweepField::render(Self) -> String
+pub fn SweepField::validate_range(Self, Double, Double, Int) -> Result[Unit, String]
 
 pub(all) struct SweepRow {
   value : Double

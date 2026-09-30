@@ -43,7 +43,7 @@ fn usage() -> Unit {
     "  compare FILE --cc reno,cubic   run one scenario under several algorithms",
   )
   println(
-    "  sweep FILE --field loss --from 0 --to 0.02 --steps 5 --cc reno,cubic",
+    "  sweep FILE --field loss|delay_ms|bandwidth_mbps|queue_packets|seed --from A --to B --steps N --cc reno,cubic",
   )
   println("  list      list the scenario files in ./scenarios")
   println("  version   print the version")
@@ -88,6 +88,13 @@ fn sweep_scenarios(args : Array[String]) -> Unit {
   }
   let field = match @lab.SweepField::parse(options.field) {
     Ok(value) => value
+    Err(message) => {
+      println(message)
+      return
+    }
+  }
+  match field.validate_range(options.from, options.to, options.steps) {
+    Ok(_) => ()
     Err(message) => {
       println(message)
       return
@@ -189,8 +196,8 @@ fn parse_common(
       }
       index = index + 2
     } else if option == "--steps" && has_value {
-      steps = match parse_number(args[index + 1]) {
-        Ok(value) => value.to_int()
+      steps = match parse_integer(args[index + 1], "steps") {
+        Ok(value) => value
         Err(message) => {
           println(message)
           return Err(message)
@@ -201,8 +208,8 @@ fn parse_common(
       as_json = true
       index = index + 1
     } else if option == "--seeds" && has_value {
-      seeds = match parse_number(args[index + 1]) {
-        Ok(value) => value.to_int()
+      seeds = match parse_integer(args[index + 1], "seeds") {
+        Ok(value) => value
         Err(message) => {
           println(message)
           return Err(message)
@@ -248,6 +255,20 @@ fn parse_number(text : String) -> Result[Double, String] {
     _ => return Err("\"" + text + "\" is not a number")
   }
   Ok(value)
+}
+
+///|
+fn parse_integer(text : String, option : String) -> Result[Int, String] {
+  let value = match parse_number(text) {
+    Ok(value) => value
+    Err(message) => return Err(message)
+  }
+  let integer = value.to_int()
+  if value != integer.to_double() {
+    Err("--" + option + " must be a whole number")
+  } else {
+    Ok(integer)
+  }
 }
 
 ///|
