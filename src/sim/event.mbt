@@ -104,6 +104,7 @@ pub struct Sim {
   mut seq : Int
   mut processed : Int
   mut recording : Bool
+  mut record_events : Bool
   heap : Array[Scheduled]
   rng : Rng
   journal : Array[String]
@@ -117,6 +118,7 @@ pub fn Sim::new(seed : UInt64) -> Sim {
     seq: 0,
     processed: 0,
     recording: false,
+    record_events: false,
     heap: [],
     rng: Rng::new(seed),
     journal: [],
@@ -151,6 +153,16 @@ pub fn Sim::processed(self : Sim) -> Int {
 /// Turn on the event journal. Journalling costs memory, so a long run keeps it
 /// off unless the caller asks for a trace to inspect or to diff.
 pub fn Sim::start_journal(self : Sim) -> Unit {
+  self.recording = true
+  self.record_events = true
+}
+
+///|
+/// Record explicit notes without retaining every scheduled event tag.
+///
+/// This is useful for protocol traces that need state transitions but not the
+/// simulator's lower-level event schedule.
+pub fn Sim::start_trace(self : Sim) -> Unit {
   self.recording = true
 }
 
@@ -235,7 +247,7 @@ pub fn Sim::step(self : Sim) -> Bool {
     Some(event) => {
       self.now = event.time
       self.processed = self.processed + 1
-      if self.recording {
+      if self.recording && self.record_events {
         self.journal.push(event.time.render() + "  " + event.tag)
       }
       (event.action)()

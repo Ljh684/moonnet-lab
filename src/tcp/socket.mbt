@@ -183,6 +183,9 @@ pub struct TcpConnection {
   /// Bytes delivered to the application, always counted.
   mut delivered_bytes : Int
   mut delivered : Bytes
+  mut has_delivered_chunk : Bool
+  mut last_delivery_ps : Int64
+  mut max_delivery_gap_ps : Int64
   mut segments_sent : Int
   mut segments_received : Int
   mut bytes_sent : Int
@@ -256,6 +259,9 @@ pub fn TcpConnection::new_with_cc(
     capture: false,
     delivered_bytes: 0,
     delivered: Bytes::new(0),
+    has_delivered_chunk: false,
+    last_delivery_ps: 0L,
+    max_delivery_gap_ps: 0L,
     segments_sent: 0,
     segments_received: 0,
     bytes_sent: 0,
@@ -401,6 +407,7 @@ pub fn TcpConnection::on_segment(
   }
   if segment.flags.ack {
     self.process_ack(sim, segment.ack, segment.window)
+    self.record_trace(sim, "ack")
   }
   if segment.flags.syn {
     self.accept_syn(sim, segment)
@@ -458,19 +465,19 @@ fn TcpConnection::accept_payload(
 ) -> Unit {
   let offset = self.rcv_nxt.distance_to(segment.seq)
   if offset == 0 {
-    self.deliver(segment.payload)
+    self.deliver(sim, segment.payload)
   } else if offset < 0 {
     // Part or all of this segment was already delivered.
     let duplicate_bytes = -offset
     if duplicate_bytes < segment.payload.length() {
-      self.deliver(bytes_drop(segment.payload, duplicate_bytes))
+      self.deliver(sim, bytes_drop(segment.payload, duplicate_bytes))
     } else {
       self.duplicate_acks = self.duplicate_acks + 1
     }
   } else {
     self.buffer_early(segment.seq, segment.payload)
   }
-  self.drain_reorder()
+  self.drain_reorder(sim)
   self.emit_ack(sim)
 }
 
@@ -624,12 +631,14 @@ fn TcpConnection::on_duplicate_ack(
     // receiving" from "the connection is stalled".
     self.cc.on_duplicate_ack(self.config.mss)
     self.pump(sim)
+    self.record_trace(sim, "duplicate_ack")
     return
   }
   let flight_size = self.snd_una.distance_to(self.snd_nxt)
   self.in_recovery = true
   self.recover_until = self.snd_nxt
   self.cc.on_fast_retransmit(flight_size, self.config.mss)
+  self.record_trace(sim, "fast_retransmit")
   self.retransmit_oldest(sim)
   self.fast_retransmits = self.fast_retransmits + 1
   // The timer restarts so that a retransmission that is itself lost is still
@@ -721,6 +730,7 @@ fn TcpConnection::on_timeout(
   // over and normal timer-driven retransmission takes over.
   self.in_recovery = false
   self.dup_ack_count = 0
+  self.record_trace(sim, "timeout")
   if self.consecutive_timeouts > self.config.max_retransmits {
     sim.note(
       "giving up after " + self.consecutive_timeouts.to_string() + " timeouts",
@@ -777,6 +787,7 @@ fn TcpConnection::retransmit_oldest(
   if sim.is_recording() {
     sim.note("retx  " + segment.label())
   }
+  self.record_trace(sim, "retransmit")
   (self.emit)(segment)
 }
 
@@ -865,6 +876,7 @@ fn TcpConnection::send_data(
   if sim.is_recording() {
     sim.note("send  " + segment.label())
   }
+  self.record_trace(sim, "send")
   (self.emit)(segment)
   self.arm_timer(sim)
 }
@@ -959,9 +971,34 @@ fn TcpConnection::advertised_window(self : TcpConnection) -> Int {
 
 ///|
 /// Append bytes to the delivered stream.
-fn TcpConnection::deliver(self : TcpConnection, payload : Bytes) -> Unit {
+fn TcpConnection::deliver(
+  self : TcpConnection,
+  sim : @sim.Sim,
+  payload : Bytes,
+) -> Unit {
   if payload.length() == 0 {
     return
+  }
+  let mut gap = 0L
+  if sim.is_recording() && self.has_delivered_chunk {
+    gap = sim.now().ps - self.last_delivery_ps
+    if gap > self.max_delivery_gap_ps {
+      self.max_delivery_gap_ps = gap
+    }
+  }
+  if sim.is_recording() {
+    self.has_delivered_chunk = true
+    self.last_delivery_ps = sim.now().ps
+    sim.note(
+      "tcp|" +
+      sim.now().ps.to_string() +
+      "|delivery|bytes=" +
+      payload.length().to_string() +
+      "|total=" +
+      (self.delivered_bytes + payload.length()).to_string() +
+      "|gap_ps=" +
+      gap.to_string(),
+    )
   }
   self.delivered_bytes = self.delivered_bytes + payload.length()
   if self.capture {
@@ -993,7 +1030,7 @@ fn TcpConnection::buffer_early(
 /// ahead of time: with a handful of segments per connection the scan is cheaper
 /// than keeping an ordered structure, and it keeps the ordering rule visible in
 /// the code.
-fn TcpConnection::drain_reorder(self : TcpConnection) -> Unit {
+fn TcpConnection::drain_reorder(self : TcpConnection, sim : @sim.Sim) -> Unit {
   while true {
     let mut found : Int? = None
     let mut index = 0
@@ -1010,10 +1047,53 @@ fn TcpConnection::drain_reorder(self : TcpConnection) -> Unit {
         let entry = self.reorder[position]
         self.reorder.remove(position) |> ignore
         self.reorder_bytes = self.reorder_bytes - entry.payload.length()
-        self.deliver(entry.payload)
+        self.deliver(sim, entry.payload)
       }
     }
   }
+}
+
+///|
+/// Record the sender state at events that can explain a change in delivery.
+fn TcpConnection::record_trace(
+  self : TcpConnection,
+  sim : @sim.Sim,
+  event : String,
+) -> Unit {
+  if !sim.is_recording() {
+    return
+  }
+  if self.bytes_sent == 0 && self.bytes_acked == 0 {
+    return
+  }
+  let srtt = match self.srtt() {
+    Some(value) => value.ps
+    None => 0L
+  }
+  sim.note(
+    "tcp|" +
+    sim.now().ps.to_string() +
+    "|" +
+    event +
+    "|state=" +
+    self.state.render() +
+    "|cwnd=" +
+    self.cc.window().to_string() +
+    "|ssthresh=" +
+    self.cc.ssthresh().to_string() +
+    "|inflight=" +
+    self.snd_una.distance_to(self.snd_nxt).to_string() +
+    "|srtt_ps=" +
+    srtt.to_string() +
+    "|rto_ps=" +
+    self.rto.ps.to_string(),
+  )
+}
+
+///|
+/// Longest gap between consecutive in-order data deliveries during a traced run.
+pub fn TcpConnection::max_delivery_gap(self : TcpConnection) -> @sim.Time {
+  @sim.Time::from_ps(self.max_delivery_gap_ps)
 }
 
 ///|

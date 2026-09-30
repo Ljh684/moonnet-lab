@@ -33,6 +33,8 @@ pub fn run(Scenario) -> RunReport
 
 pub fn run_fairness(Scenario) -> FairnessReport
 
+pub fn run_with_trace(Scenario) -> TraceRun
+
 pub fn summarise(Scenario, String, Int) -> RunSummary
 
 pub fn sweep(Scenario, SweepField, Double, Double, Int, Array[String], seeds? : Int) -> Array[SweepRow]
@@ -160,6 +162,14 @@ pub(all) struct SweepRow {
   value : Double
   results : Array[(String, RunSummary)]
 }
+
+pub(all) struct TraceRun {
+  report : RunReport
+  events : Array[String]
+  max_delivery_gap : @sim.Time
+}
+pub fn TraceRun::to_json_text(Self) -> String
+pub fn TraceRun::to_lines(Self) -> String
 
 // Type aliases
 

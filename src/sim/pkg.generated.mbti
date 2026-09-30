@@ -43,6 +43,7 @@ pub struct Sim {
   mut seq : Int
   mut processed : Int
   mut recording : Bool
+  mut record_events : Bool
   heap : Array[Scheduled]
   rng : Rng
   journal : Array[String]
@@ -62,6 +63,7 @@ pub fn Sim::run_for(Self, Time) -> Unit
 pub fn Sim::run_until(Self, Time) -> Unit
 pub fn Sim::schedule_at(Self, Time, String, () -> Unit) -> Unit
 pub fn Sim::start_journal(Self) -> Unit
+pub fn Sim::start_trace(Self) -> Unit
 pub fn Sim::step(Self) -> Bool
 pub fn Sim::step_until(Self, () -> Bool, max_events? : Int) -> Bool
 

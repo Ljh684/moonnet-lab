@@ -120,6 +120,9 @@ pub fn[T] Link::send(
     self.started_at = sim.now()
   }
   let admission = self.queue.enqueue(packet, sim.now())
+  if sim.is_recording() {
+    self.record_queue(sim, "enqueue:" + admission.render())
+  }
   match admission {
     Accepted => self.pump(sim)
     _ => ()
@@ -142,6 +145,9 @@ pub fn[T] Link::pump(self : Link[T], sim : @sim.Sim) -> Unit {
   match self.queue.dequeue(sim.now()) {
     None => ()
     Some(packet) => {
+      if sim.is_recording() {
+        self.record_queue(sim, "dequeue")
+      }
       let service = @sim.Time::serialize(
         packet.size.to_int64(),
         self.spec.bandwidth_bps,
@@ -173,6 +179,31 @@ pub fn[T] Link::pump(self : Link[T], sim : @sim.Sim) -> Unit {
       sim.at(departure, link_name + " free", () => self.pump(sim))
     }
   }
+}
+
+///|
+/// Record waiting-buffer occupancy when a trace is enabled.
+fn[T] Link::record_queue(
+  self : Link[T],
+  sim : @sim.Sim,
+  event : String,
+) -> Unit {
+  sim.note(
+    "net|" +
+    sim.now().ps.to_string() +
+    "|queue|" +
+    self.spec.name +
+    "|" +
+    event +
+    "|packets=" +
+    self.queue.length().to_string() +
+    "|bytes=" +
+    self.queue.bytes().to_string() +
+    "|dropped=" +
+    self.queue.dropped().to_string() +
+    "|early=" +
+    self.queue.dropped_early().to_string(),
+  )
 }
 
 ///|

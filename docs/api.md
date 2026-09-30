@@ -8,11 +8,11 @@
 
 | 包 | 职责 | 入口 |
 | --- | --- | --- |
-| `src/sim` | 虚拟时钟、事件堆、冻结的随机源 | `Sim::new` / `run` / `step_until` / `schedule_at` / `now`、`Time` 的全部换算、`Rng::new` / `fork`、`mix64` / `fnv1a64` |
+| `src/sim` | 虚拟时钟、事件堆、冻结的随机源 | `Sim::new` / `run` / `step_until` / `schedule_at` / `now` / `start_trace` / `start_journal`、`Time` 的全部换算、`Rng::new` / `fork`、`mix64` / `fnv1a64` |
 | `src/net` | 链路与队列：带宽、传播延迟、抖动、丢包、缓冲与队列管理 | `LinkSpec::new` / `with_loss` / `with_jitter`、`QueueSpec::packets` / `bytes` / `with_discipline`、`Link::new` / `send` / `summary`、`dropped` / `lost` / `mean_queue_packets` / `max_sojourn` |
 | `src/tcp` | TCP 状态机、重传与恢复、可插拔拥塞控制 | `TcpConfig::new`、`LinkPair::new_with_cc`、`TcpConnection::connect` / `send` / `close` / `cwnd` / `retransmits`、`Reno::new` / `cubic(mss)`、`CongestionControl` 接口 |
 | `src/json` | 零依赖 JSON 读写，解析错误带字节偏移 | `parse`、`Json` 取值、`object_text` / `object_of_texts` |
-| `src/lab` | 场景与报告：把实验写成数据 | `Scenario::from_json`、`run`、`compare`、`sweep`、`summarise`、`run_fairness`、`RunReport::to_json_text` / `to_lines` |
+| `src/lab` | 场景与报告：把实验写成数据 | `Scenario::from_json`、`run`、`run_with_trace`、`compare`、`sweep`、`summarise`、`run_fairness`、`RunReport::to_json_text` / `to_lines`、`TraceRun::to_json_text` / `to_lines` |
 | `cmd/moonnet` | 命令行前端 | `run` / `compare` / `sweep` / `list` / `version` |
 
 ## 稳定面在哪里

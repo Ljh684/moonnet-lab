@@ -42,6 +42,7 @@ moonnet-lab 把网络行为建模成纯函数：给定拓扑、流量、参数�
 moon test                        # 运行全部测试
 moon run cmd/moonnet -- list     # 列出 scenarios 目录里的实验
 moon run cmd/moonnet -- run scenarios/long-fat.json --cc cubic
+moon run cmd/moonnet -- run scenarios/bufferbloat-shallow.json --cc reno --trace --json > trace.json
 moon run cmd/moonnet -- compare scenarios/long-fat.json --cc reno,cubic
 moon run cmd/moonnet -- sweep scenarios/small-buffers.json --field loss --from 0 --to 0.02 --steps 5
 moon run cmd/moonnet -- run scenarios/fairness.json   # 多条流抢一条链路
@@ -49,6 +50,8 @@ moon run cmd/moonnet -- run scenarios/bufferbloat.json --discipline codel
 ```
 
 命令只有五个，每个都对应一份可编辑的场景文件。**五个子命令就是全部接口**：一件事只有一种做法。
+
+单流场景可用 `--trace` 保留 TCP 状态与队列轨迹。与 `--json` 一起使用时，会输出包含普通报告、轨迹列表和交付间隔诊断的 JSON 文档。轨迹记录发送、确认、重传和超时时的拥塞窗口、阈值、在途字节、平滑 RTT、RTO，以及上下行队列的包数、字节数和丢弃计数；最长交付间隔按接收端连续交付的数据块计算，可用于定位传输停顿。多流轨迹暂不支持。
 
 ## 作为库使用：命令行只是一个使用者
 

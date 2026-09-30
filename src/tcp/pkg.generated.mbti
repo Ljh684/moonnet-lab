@@ -137,6 +137,9 @@ pub struct TcpConnection {
   mut capture : Bool
   mut delivered_bytes : Int
   mut delivered : Bytes
+  mut has_delivered_chunk : Bool
+  mut last_delivery_ps : Int64
+  mut max_delivery_gap_ps : Int64
   mut segments_sent : Int
   mut segments_received : Int
   mut bytes_sent : Int
@@ -172,6 +175,7 @@ pub fn TcpConnection::fast_retransmits(Self) -> Int
 pub fn TcpConnection::in_recovery(Self) -> Bool
 pub fn TcpConnection::inflight(Self) -> Int
 pub fn TcpConnection::listen(Self) -> Unit
+pub fn TcpConnection::max_delivery_gap(Self) -> @sim.Time
 pub fn TcpConnection::new(TcpConfig) -> Self
 pub fn TcpConnection::new_with_cc(TcpConfig, &CongestionControl) -> Self
 pub fn TcpConnection::on_segment(Self, @sim.Sim, Segment) -> Unit

@@ -32,6 +32,14 @@ pub(all) struct RunReport {
 } derive(Eq, Debug)
 
 ///|
+/// A run with its TCP event trace and delivery-gap diagnostic retained.
+pub(all) struct TraceRun {
+  report : RunReport
+  events : Array[String]
+  max_delivery_gap : @sim.Time
+}
+
+///|
 /// The congestion control algorithm a name refers to.
 pub fn algorithm_of(name : String, mss : Int) -> &@tcp.CongestionControl {
   match name {
@@ -64,6 +72,17 @@ fn link_of(profile : LinkProfile) -> @net.LinkSpec {
 /// queue first would move the clock past the moment of interest, because a
 /// connection leaves superseded timer events behind.
 pub fn run(scenario : Scenario) -> RunReport {
+  run_internal(scenario, false).report
+}
+
+///|
+/// Run one scenario with TCP state and event journaling enabled.
+pub fn run_with_trace(scenario : Scenario) -> TraceRun {
+  run_internal(scenario, true)
+}
+
+///|
+fn run_internal(scenario : Scenario, record_trace : Bool) -> TraceRun {
   let sim = @sim.Sim::new(scenario.seed)
   let pair = @tcp.LinkPair::new_with_cc(
     sim,
@@ -83,6 +102,9 @@ pub fn run(scenario : Scenario) -> RunReport {
     algorithm_of(scenario.algorithm, scenario.client.mss),
   )
   let start = sim.now()
+  if record_trace {
+    sim.start_trace()
+  }
   pair.connect(sim)
   sim.step_until(() => pair.client.state() == @tcp.Established) |> ignore
   let connected_at = sim.now()
@@ -98,7 +120,7 @@ pub fn run(scenario : Scenario) -> RunReport {
   // Drain the rest so that the counters describe a settled connection, then read
   // them. The two timings above were taken before this point.
   sim.run()
-  {
+  let report = {
     scenario: scenario.name,
     algorithm: pair.client.cc_name(),
     seed: scenario.seed,
@@ -123,6 +145,53 @@ pub fn run(scenario : Scenario) -> RunReport {
     mean_queue_packets,
     max_sojourn: pair.up.max_sojourn(),
   }
+  {
+    report,
+    events: tcp_trace_events(sim.journal()),
+    max_delivery_gap: pair.server.max_delivery_gap(),
+  }
+}
+
+///|
+/// Keep structured TCP samples and discard lower-level scheduler logs.
+fn tcp_trace_events(journal : Array[String]) -> Array[String] {
+  let events : Array[String] = []
+  for entry in journal {
+    if entry.split("tcp|").length() > 1 || entry.split("net|").length() > 1 {
+      events.push(entry)
+    }
+  }
+  events
+}
+
+///|
+/// The traced run as JSON, with report fields, transport and queue events.
+pub fn TraceRun::to_json_text(self : TraceRun) -> String {
+  let events : Array[String] = []
+  for event in self.events {
+    events.push(@json.quote(event))
+  }
+  @json.object_of_texts([
+    ("report", self.report.to_json_text()),
+    (
+      "delivery_diagnostics",
+      @json.object_of_texts([
+        ("max_inter_delivery_gap_ps", self.max_delivery_gap.ps.to_string()),
+        ("max_inter_delivery_gap", @json.quote(self.max_delivery_gap.render())),
+      ]),
+    ),
+    ("events", @json.array_of_texts(events)),
+  ])
+}
+
+///|
+/// The traced run as a readable report followed by transport and queue samples.
+pub fn TraceRun::to_lines(self : TraceRun) -> String {
+  self.report.to_lines() +
+  "\nmax inter-delivery gap: " +
+  self.max_delivery_gap.render() +
+  "\nevent trace:\n" +
+  self.events.join("\n")
 }
 
 ///|

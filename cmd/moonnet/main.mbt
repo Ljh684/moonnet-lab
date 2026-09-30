@@ -37,7 +37,7 @@ fn usage() -> Unit {
   println("")
   println("commands:")
   println(
-    "  run FILE  run a scenario file, with --cc NAME, --discipline NAME and --json options",
+    "  run FILE  run a scenario file; --trace adds TCP state and event history",
   )
   println(
     "  compare FILE --cc reno,cubic   run one scenario under several algorithms",
@@ -262,7 +262,7 @@ fn parse_number(text : String) -> Result[Double, String] {
 fn run_scenario(args : Array[String]) -> Unit {
   if args.length() < 3 {
     println(
-      "usage: moonnet run <scenario.json> [--cc none|reno|cubic] [--discipline drop-tail|red|codel] [--json]",
+      "usage: moonnet run <scenario.json> [--cc none|reno|cubic] [--discipline drop-tail|red|codel] [--json] [--trace]",
     )
     return
   }
@@ -270,6 +270,7 @@ fn run_scenario(args : Array[String]) -> Unit {
   let mut algorithm = ""
   let mut discipline = ""
   let mut as_json = false
+  let mut trace = false
   let mut index = 3
   while index < args.length() {
     if args[index] == "--cc" && index + 1 < args.length() {
@@ -280,6 +281,9 @@ fn run_scenario(args : Array[String]) -> Unit {
       index = index + 2
     } else if args[index] == "--json" {
       as_json = true
+      index = index + 1
+    } else if args[index] == "--trace" {
+      trace = true
       index = index + 1
     } else {
       println("unknown option: " + args[index])
@@ -340,11 +344,22 @@ fn run_scenario(args : Array[String]) -> Unit {
   // A scenario that names several flows is a fairness experiment: the flows
   // share one path, so the interesting output is per-flow rather than per-run.
   if experiment.flow_algorithms().length() > 1 {
+    if trace {
+      println("--trace currently supports single-flow scenarios")
+      return
+    }
     let fairness = @lab.run_fairness(experiment)
     if as_json {
       println(fairness.to_json_text())
     } else {
       println(fairness.to_lines())
+    }
+  } else if trace {
+    let traced = @lab.run_with_trace(experiment)
+    if as_json {
+      println(traced.to_json_text())
+    } else {
+      println(traced.to_lines())
     }
   } else {
     let report = @lab.run(experiment)
