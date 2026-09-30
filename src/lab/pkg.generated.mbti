@@ -45,6 +45,8 @@ pub fn sweep_lines(Scenario, SweepField, Array[SweepRow], Array[String]) -> Stri
 
 pub fn sweep_values(Double, Double, Int) -> Array[Double]
 
+pub fn trace_svg_from_json(String) -> Result[String, String]
+
 // Errors
 
 // Types and methods

@@ -1,8 +1,8 @@
 # 作为依赖使用：包的职责、入口与稳定面
 
-命令行工具只是这套库的一个使用者。把仓库作为依赖加进自己的模块（`moon.mod` 里的 `import`，或按本地路径 / git 引用），就能在自己的程序或测试里直接调用下面这些包。
+命令行工具只是这套库的一个使用者。使用 Mooncakes 上的 `0.1.0` 版本时，在下游项目执行 `moon add Ljh684/moonnet-lab@0.1.0`，再在需要调用库的 `moon.pkg` 中导入 `Ljh684/moonnet-lab/src/sim`、`src/net`、`src/tcp` 等包。
 
-模块**尚未发布到 mooncakes.io**，这一步只差维护者登录后执行一次：`moon login`（首次）然后 `moon publish`。`moon.mod` 里的 name / version / readme / license / repository / keywords 都已就位，`moon publish --dry-run` 只会停在缺少凭据这一处。
+`moon.mod` 声明了模块名称、版本、README、许可证、仓库、关键词与依赖。每次发布前可通过 `moon package --list` 检查打包文件，再运行 `moon publish --dry-run` 校验归档。
 
 ## 包的职责与入口
 
@@ -12,8 +12,8 @@
 | `src/net` | 链路与队列：带宽、传播延迟、抖动、丢包、缓冲与队列管理 | `LinkSpec::new` / `with_loss` / `with_jitter`、`QueueSpec::packets` / `bytes` / `with_discipline`、`Link::new` / `send` / `summary`、`dropped` / `lost` / `mean_queue_packets` / `max_sojourn` |
 | `src/tcp` | TCP 状态机、重传与恢复、可插拔拥塞控制 | `TcpConfig::new`、`LinkPair::new_with_cc`、`TcpConnection::connect` / `send` / `close` / `cwnd` / `retransmits` / `tlp_probes`、`Reno::new` / `cubic(mss)`、`CongestionControl` 接口 |
 | `src/json` | 零依赖 JSON 读写，解析错误带字节偏移 | `parse`、`Json` 取值、`object_text` / `object_of_texts` |
-| `src/lab` | 场景与报告：把实验写成数据 | `Scenario::from_json`、`run`、`run_with_trace`、`SweepField::parse` / `validate_range`、`compare`、`sweep`、`summarise`、`run_fairness`、`RunReport::to_json_text` / `to_lines`、`TraceRun.delivery_diagnostics` / `to_json_text` / `to_lines` |
-| `cmd/moonnet` | 命令行前端 | `run` / `compare` / `sweep` / `list` / `version` |
+| `src/lab` | 场景与报告：把实验写成数据 | `Scenario::from_json`、`run`、`run_with_trace`、`trace_svg_from_json`、`SweepField::parse` / `validate_range`、`compare`、`sweep`、`summarise`、`run_fairness`、`RunReport::to_json_text` / `to_lines`、`TraceRun.delivery_diagnostics` / `to_json_text` / `to_lines` |
+| `cmd/moonnet` | 命令行前端 | `run` / `plot` / `compare` / `sweep` / `list` / `version` |
 
 ## 稳定面在哪里
 
@@ -21,6 +21,7 @@
 - **值是记录，字段就是契约**：`Time`、`Packet`、`Segment`、`Seq`、`Flags`、`TcpConfig`、`LinkSpec`、`QueueSpec` 以及 `src/lab` 的 `Scenario` / `RunReport` / `RunSummary` / `TraceRun` / `DeliveryDiagnostics` / `DeliveryStall` 是纯数据，字段公开、可读可构造。
 - **队列扫描汇总口径**：`RunSummary.mean_queue_packets` 是跨运行的平均上行队列占用；`mean_max_sojourn` 是每次运行最大排队等待时间的均值；`worst_max_sojourn` 是跨运行观测到的最大等待时间。JSON 使用毫秒字段 `mean_max_sojourn_ms` / `worst_max_sojourn_ms`。`SweepField::validate_range` 对 `queue_packets` 要求正整数端点、包含端点的步数和不重复容量；库调用方应在调用 `sweep` 前验证范围，CLI 会自动验证。
 - **停顿诊断说明**：`TraceRun::delivery_diagnostics` 只统计超过 `max(2 × SRTT, 1 ms)` 的连续交付间隔，提供次数、累计/最长时长和逐段观测信号。队列非空、恢复事件、发送窗口阻塞可能同时出现；这些字段记录证据，不保证单一因果归属。
+- **轨迹图表**：`trace_svg_from_json` 接受 `run --trace --json` 生成的单流报告，返回不依赖外部资源的 SVG 字符串。图表按仿真时间绘制窗口、在途字节和双向队列，标注恢复事件与停顿区间；相同输入产生相同输出。
 - **接口的机器可读版本**是每个包目录下的 `pkg.generated.mbti`，由 `moon info` 生成。它和代码一起进版本库，因此**一次接口改动在 diff 里是什么样的，任何人都能看见**；CI 会重新生成它，改动不会是意外。
 - **版本与兼容**：当前 `0.1.0`。0.x 阶段按 minor 递增，破坏性改动不承诺同 minor 兼容；等接口稳定到 1.0 再给兼容承诺。这不是免责声明，是让"能不能依赖"变成一个有日期的判断。
 

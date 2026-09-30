@@ -41,6 +41,20 @@ jobs:
           moon run cmd/moonnet -- list
           moon run cmd/moonnet -- compare scenarios/long-fat.json --cc reno,cubic
           moon run cmd/moonnet -- run scenarios/bufferbloat.json --discipline codel
+          moon run cmd/moonnet -- run scenarios/small-buffers.json --trace --json > trace.json
+          moon run cmd/moonnet -- plot trace.json > trace.svg
+          moon run cmd/moonnet -- plot trace.json > trace-again.svg
+          cmp trace.svg trace-again.svg
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+
+          root = ET.parse("trace.svg").getroot()
+          ns = {"svg": "http://www.w3.org/2000/svg"}
+          assert root.tag == "{http://www.w3.org/2000/svg}svg"
+          assert len(root.findall(".//svg:polyline", ns)) == 4
+          assert any("event " in node.get("class", "") for node in root.findall(".//svg:line", ns))
+          assert any(node.get("class") == "stall" for node in root.findall(".//svg:rect", ns))
+          PY
 
       # The command line tool is one consumer of the library. These two are
       # consumers that do not use it at all, which is the claim the repository

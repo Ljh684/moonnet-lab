@@ -29,7 +29,7 @@ moonnet-lab 把网络行为建模成纯函数：给定拓扑、流量、参数�
 | `src/tcp` | 可插拔拥塞控制接口、Reno（RFC 5681/6928）、CUBIC（RFC 9438） | 完成 |
 | `src/json` | 零依赖的 JSON 读写，供场景文件与报告使用 | 完成 |
 | `src/lab` | 场景文件、运行、指标报告、对比与扫描、多流公平性 | 完成 |
-| `cmd/moonnet` | 五个子命令：`run` / `compare` / `sweep` / `list` / `version` | 完成 |
+| `cmd/moonnet` | 六个子命令：`run` / `plot` / `compare` / `sweep` / `list` / `version` | 完成 |
 | `examples/` | 两个用库写成的消费者程序（不含命令行）：`embed_tcp`、`rpc_retry` | 完成 |
 
 **明确不做**：通用仿真框架（用 [moonsim](https://mooncakes.io/docs/zlhahaha/moonsim)）、pcap 解析（已有实现）、与真实网络互操作（用 Mininet）、大规模并发、图形界面。理由写在下面的"与生态中已有工作的关系"。
@@ -43,6 +43,7 @@ moon test                        # 运行全部测试
 moon run cmd/moonnet -- list     # 列出 scenarios 目录里的实验
 moon run cmd/moonnet -- run scenarios/long-fat.json --cc cubic
 moon run cmd/moonnet -- run scenarios/bufferbloat-shallow.json --cc reno --trace --json > trace.json
+moon run cmd/moonnet -- plot trace.json > trace.svg
 moon run cmd/moonnet -- compare scenarios/long-fat.json --cc reno,cubic
 moon run cmd/moonnet -- sweep scenarios/small-buffers.json --field loss --from 0 --to 0.02 --steps 5
 moon run cmd/moonnet -- sweep scenarios/bufferbloat.json --field queue_packets --from 16 --to 600 --steps 5 --cc reno,cubic --seeds 3
@@ -50,11 +51,13 @@ moon run cmd/moonnet -- run scenarios/fairness.json   # 多条流抢一条链路
 moon run cmd/moonnet -- run scenarios/bufferbloat.json --discipline codel
 ```
 
-命令只有五个，每个都对应一份可编辑的场景文件。**五个子命令就是全部接口**：一件事只有一种做法。
+命令有六个，实验命令都对应可编辑的文件。`plot` 读取已归档的 trace JSON，不会重新运行仿真。
 
 `sweep --field queue_packets` 会把上下行缓冲区设为同一容量并扫描指定范围。`--from` 和 `--to` 必须是正整数；`--steps` 包含两端点，不能超过范围内不同容量的数量。中间点按等距插值后四舍五入到整数。结果除了吞吐和耗时，还汇总上行队列的平均占用、每次运行最大等待时间的跨种子均值，以及所有种子里的最坏等待时间；文本和 JSON 都包含这些指标。均值队列占用按每次运行实际测量时长计算，不把连接结束后的空队列时间计入。
 
 单流场景可用 `--trace` 保留 TCP 状态与队列轨迹。与 `--json` 一起使用时，会输出普通报告、事件轨迹和 `delivery_diagnostics`：把超过 `max(2 × SRTT, 1 ms)` 的连续交付间隔列为停顿，汇总次数、累计时长和最长时长，并为每段标出期间是否观察到排队、重传/恢复事件或发送窗口阻塞。三种信号可以重叠，代表区间内出现过的证据，不把相关性冒充成单一因果。轨迹记录发送、确认、重传、尾部探测和超时时的拥塞窗口、阈值、在途字节、平滑 RTT、RTO，以及上下行队列的包数、字节数和丢弃计数。多流轨迹暂不支持。
+
+`plot <trace.json>` 会把保存的单流轨迹转成可独立打开的 SVG：上图对比拥塞窗口与在途字节，下图对比上下行队列；重传、超时、快速重传和尾部探测用竖线标记，交付停顿用色带标记。同一份 trace JSON 总会生成字节一致的图表，不需要第三方绘图库。
 
 Reno 在浅缓冲队尾连续丢包时，常规重复 ACK 可能不足以暴露最后几个丢失段。TCP 现在会在 RTO 前发一个尾部探测包，用它请求接收端反馈，再交给 NewReno 修复可见的缺口。用路线图中的 3 MB 浅缓冲场景复现，耗时从 10047.347 秒降到 20.242 秒，超时从 192 次降到 4 次；剩余超时仍由 RTO 兜底。
 
@@ -88,7 +91,7 @@ moon run examples/embed_tcp/main    # 三个算法跑同一段传输
 moon run examples/rpc_retry/main    # 不同丢包率下，一次调用要几次重试
 ```
 
-包的职责、稳定面与兼容承诺写在 [docs/api.md](docs/api.md)：有内部状态的对象只暴露方法，值是记录，接口清单是随代码进版本库的 `pkg.generated.mbti`。模块目前按 git 或本地路径引用；发布到 mooncakes.io 只差维护者执行一次 `moon login` + `moon publish`，元数据已经就位。
+包的职责、稳定面与兼容承诺写在 [docs/api.md](docs/api.md)：有内部状态的对象只暴露方法，值是记录，接口清单是随代码进版本库的 `pkg.generated.mbti`。使用 Mooncakes 上的 `0.1.0` 版本时，下游执行 `moon add Ljh684/moonnet-lab@0.1.0`，并在 `moon.pkg` 中导入所需的 `Ljh684/moonnet-lab/src/*` 包。
 
 ## 一个例子：同一个丢包，代价差二十倍
 
@@ -295,9 +298,9 @@ moon run cmd/moonnet -- run scenarios/bufferbloat-shallow.json                # 
 2. **CoDel 修的正是这件事，而且吞吐更高。** 它在缓冲区还空着一大半时就开始拒绝包（34 次拒绝全部是提前丢弃），发送端随之收缩窗口，队列不再站着：最坏排队延迟降到 226 毫秒，传输快了 3.3 倍，吞吐从 1445 涨到 4758 kbit/s（同一条 5 Mbps 链路的 95%）。
 3. **RED 在这条路径上把连接锁死了。** 3 MB 数据用了 5.4 小时，326 次超时。RED 的判定量是"到达时更新的平均占用"：单条流把平均值推过上限之后，发送端停止发包，而这个平均值只能被**到达的包**推低，于是每 60 秒一次的定时器重传刚一到就被拒绝。换个拥塞控制也一样（`--cc reno` 是 17128.905s / 294 次超时），所以这是队列策略的性质，不是某个算法的性质。
 
-第 3 条是这一轮最想记录的结果：它不是设计出来的结论，而是跑出来的。RED 的这种锁死（以及"它为什么需要 gentle/ARED 这类改良"）在文献里有记载，但把它和 CoDel 放在同一份场景文件、同一份报告格式下对照，是文档读不出来的东西——**这正是"能改参数的实验台"和"读文档"的区别。**
+第 3 条暴露了当前 RED 实现的一个限制：平均占用只在包到达时更新，队列长时间空闲后也不会衰减。它把问题固定成可复现的场景；后续修复后，需要用同一份场景重新测量，而不能继续把这组数字当作 RED 策略的一般结论。
 
-这张表把算法固定在 CUBIC。换 `--cc reno` 会得到另一幅图景，而且比这张表更值得警惕：深缓冲区下 drop-tail 16.303s、CoDel 36.271s（Reno 对每一次丢弃都减半窗口，零星丢弃比成批队尾丢弃更贵）；64 包缓冲区下 drop-tail 要 10047.347s、192 次超时。后一个数字我们**没有把握解释**，它和路线图里那个尚未查清的问题（成批丢失后只能靠定时器推进）很可能是同一件事。数据留在这里，解释等查清再写。
+这张表把算法固定在 CUBIC。换 `--cc reno` 会得到另一幅图景：深缓冲区下 drop-tail 16.303s、CoDel 36.271s（Reno 对每一次丢弃都减半窗口，零星丢弃比成批队尾丢弃更贵）。64 包缓冲区下，旧版在成批队尾丢包后靠定时器推进，曾耗时 10047.347s、超时 192 次；加入尾部探测后，同一场景为 20.242s、4 次超时。前一组数值保留为修复前的对照，不代表当前版本的运行结果。
 
 ## 确定性是怎么保证的
 

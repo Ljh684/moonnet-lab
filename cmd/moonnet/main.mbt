@@ -12,6 +12,7 @@ fn main {
   match command {
     "version" => println(version_line())
     "run" => run_scenario(args)
+    "plot" => plot_trace(args)
     "compare" => compare_scenarios(args)
     "sweep" => sweep_scenarios(args)
     "list" => list_scenarios()
@@ -39,6 +40,7 @@ fn usage() -> Unit {
   println(
     "  run FILE  run a scenario file; --trace adds TCP state and event history",
   )
+  println("  plot FILE render a single-flow trace JSON document as SVG")
   println(
     "  compare FILE --cc reno,cubic   run one scenario under several algorithms",
   )
@@ -246,6 +248,75 @@ fn load_scenario(path : String) -> Result[@lab.Scenario, String] {
   match @lab.Scenario::from_json(document) {
     Ok(value) => Ok(value)
     Err(message) => Err(path + " is not a usable scenario: " + message)
+  }
+}
+
+///|
+/// Render an archived trace JSON document as a standalone SVG on stdout.
+///
+///     moonnet plot trace.json > trace.svg
+fn plot_trace(args : Array[String]) -> Unit {
+  if args.length() != 3 {
+    println("usage: moonnet plot <trace.json> > trace.svg")
+    return
+  }
+  let path = args[2]
+  let source = match read_plot_input(path) {
+    Ok(value) => value
+    Err(message) => {
+      println(message)
+      return
+    }
+  }
+  match @lab.trace_svg_from_json(source) {
+    Ok(svg) => println(svg)
+    Err(message) => println("cannot render trace: " + message)
+  }
+}
+
+///|
+/// Read UTF-8 files and PowerShell's common UTF-16 redirected output.
+fn read_plot_input(path : String) -> Result[String, String] {
+  let bytes = @fs.read_file_to_bytes(path) catch {
+    _ => return Err("cannot read " + path)
+  }
+  match decode_plot_bytes(bytes) {
+    Ok(value) => Ok(value)
+    Err(message) => Err("cannot decode " + path + ": " + message)
+  }
+}
+
+///|
+/// Decode UTF-8 and BOM-marked UTF-16 text used by redirected CLI output.
+fn decode_plot_bytes(bytes : Bytes) -> Result[String, String] {
+  let first = match bytes.get(0) {
+    Some(value) => value.to_int()
+    None => 0
+  }
+  let second = match bytes.get(1) {
+    Some(value) => value.to_int()
+    None => 0
+  }
+  if first == 255 && second == 254 {
+    let text = @utf16.decode(
+      bytes,
+      ignore_bom=true,
+      endianness=@utf16.Endian::Little,
+    ) catch {
+      _ => return Err("invalid UTF-16LE")
+    }
+    Ok(text)
+  } else if first == 254 && second == 255 {
+    let text = @utf16.decode(
+      bytes,
+      ignore_bom=true,
+      endianness=@utf16.Endian::Big,
+    ) catch {
+      _ => return Err("invalid UTF-16BE")
+    }
+    Ok(text)
+  } else {
+    Ok(@utf8.decode_lossy(bytes, ignore_bom=true))
   }
 }
 

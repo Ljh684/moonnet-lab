@@ -2,6 +2,8 @@ import {
   "Ljh684/moonnet-lab/src/lab",
   "Ljh684/moonnet-lab/src/json",
   "moonbitlang/core/env",
+  "moonbitlang/core/encoding/utf16",
+  "moonbitlang/core/encoding/utf8",
   "moonbitlang/core/string",
   "moonbitlang/x/fs",
 }

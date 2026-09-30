@@ -2,7 +2,7 @@
 
 一句话：`moon test` 全绿，CI 在干净的 Linux runner 上跑同一套命令；本文档里的每一个数字都来自仓库里的一份场景文件，命令写在数字旁边。
 
-## 一、测试（102 个，`moon test`）
+## 一、测试（111 个，`moon test`）
 
 按覆盖的东西分组，不是按文件分组：
 
@@ -34,7 +34,7 @@
 
 ## 四、端到端
 
-CI（`.github/workflows/ci.yml`）在干净的 Linux runner 上依次执行：`moon fmt --check`、`moon check`、`moon test`，然后真正把命令行跑起来——`list` 列场景、`compare` 在长肥链路上对比两种算法、`run --discipline codel` 跑缓冲区实验。也就是说场景文件、报告格式和命令行本身都在 CI 覆盖范围内，不只是库函数。
+CI（`.github/workflows/ci.yml`）在干净的 Linux runner 上依次执行：`moon fmt --check`、`moon check`、`moon test`，然后真正把命令行跑起来——`list` 列场景、`compare` 在长肥链路上对比两种算法、`run --discipline codel` 跑缓冲区实验，并将单流轨迹导出为 SVG，检查重复输出一致且 XML 可解析。场景文件、报告格式和命令行都在 CI 覆盖范围内。
 
 同一份 CI 还会运行两个**不使用命令行**的消费者包（`examples/embed_tcp`、`examples/rpc_retry`）。这一条是"库可以被别的程序依赖"这句话的验证方式：如果哪天库的接口只对 `cmd/moonnet` 可用、对普通调用者不可用，这两个步骤会先失败。
 
@@ -61,4 +61,4 @@ moon run examples/rpc_retry/main    # 不同丢包率下，一次调用要几次
 
 ## 六、还没验证的地方
 
-写在这里而不是省略：延迟 ACK、SACK、重排序检测没有实现；队列只有一个出队口，没有 AQM 的多队列/加权形态；协议行为按 RFC 实现，不等于真实内核。已知边界与两个未查清的问题记在 [roadmap.md](roadmap.md)。
+写在这里而不是省略：延迟 ACK、SACK、重排序检测没有实现；队列只有一个出队口，没有 AQM 的多队列/加权形态；协议行为按 RFC 实现，不等于真实内核。已知边界与后续工作记在 [roadmap.md](roadmap.md)。

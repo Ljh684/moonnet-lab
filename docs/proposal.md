@@ -3,9 +3,9 @@
 | 项目名称 | moonnet-lab（月兔网络实验室） |
 | --- | --- |
 | 参赛者 | Ljh684 |
-| 开源仓库 | https://github.com/Ljh684/moonnet-lab （公开，Apache-2.0，CI 绿） |
-| 语言与依赖 | MoonBit；库本身零依赖，只有命令行工具用官方扩展库 `moonbitlang/x` 读文件 |
-| 规模 | 22 个实现文件 + 7 个测试文件，源码 6127 行、测试 2204 行，102 个测试全部通过 |
+| 开源仓库 | https://github.com/Ljh684/moonnet-lab （公开，Apache-2.0） |
+| 语言与依赖 | MoonBit；库本身零依赖，只有命令行工具用官方扩展库 `moonbitlang/x` 读写文件 |
+| 规模 | 24 个实现文件 + 10 个测试文件，源码 8050 行、测试 2659 行，111 个测试全部通过 |
 
 ## 一、项目目标与应用场景
 
@@ -22,14 +22,14 @@
 | F3 | TCP 协议栈：握手、滑动窗口、乱序重组、RTO 估计、快速重传、多丢包恢复 | `src/tcp` | 已完成 |
 | F4 | 拥塞控制：可插拔接口、Reno、CUBIC | `src/tcp` | 已完成 |
 | F5 | 实验与报告：场景、JSON 报告、对比、扫描、多种子平均、多流公平性 | `src/lab` | 已完成 |
-| F6 | 命令行与场景：5 个子命令、7 份场景 | `cmd/moonnet` | 已完成 |
+| F6 | 命令行与场景：6 个子命令、7 份场景 | `cmd/moonnet` | 已完成 |
 | F7 | 可复用接口与下游示例：字段私有的组件 + 两个不使用命令行的消费者 | `src/*`、`examples/` | 已完成 |
 
-不在本次范围：Vegas 等延迟型算法、图表输出、通用仿真框架、pcap 解析、与真实协议栈互操作；明细见 [README.md](../README.md)。
+不在本次范围：Vegas 等延迟型算法、通用仿真框架、pcap 解析、与真实协议栈互操作；明细见 [README.md](../README.md)。
 
 ## 三、验收说明
 
-全部验收由 `moon test`（102 个测试）与一次 CI 完成，逐条对应 F1–F7；下表里的 `moonnet` 指 `moon run cmd/moonnet --`。
+本地 `moon test` 已通过 111 个测试；CI 配置逐条覆盖 F1–F7。下表里的 `moonnet` 指 `moon run cmd/moonnet --`。
 
 | 编号 | 怎么验 | 通过标准 |
 | --- | --- | --- |
@@ -38,14 +38,14 @@
 | F3 | `moonnet compare scenarios/long-fat.json --cc reno,cubic --seeds 3` | 1% 丢包下都完整送达 20 MB；超时 112 对 23 次 |
 | F4 | 同上，加 `moon test` 的窗口断言 | 均值 706.1 对 218.6 秒；同一串丢包下在途字节 3500 对 4000 |
 | F5 | `moonnet run scenarios/fairness.json` | 4 条流聚合 9.75 Mbps ≤ 10 Mbps 链路容量；Jain 指数 0.77–0.93 |
-| F6 | CI 在干净 runner 上跑 `moon fmt --check`、`moon check`、`moon test` 与 `list` / `compare` / `run` | 全部通过 |
+| F6 | CI 在干净 runner 上跑 `moon fmt --check`、`moon check`、`moon test` 与 `list` / `compare` / `run` / `plot` | `plot` 将归档 trace JSON 生成为确定性、可解析的独立 SVG |
 | F7 | `moon run examples/embed_tcp/main`、`moon run examples/rpc_retry/main` | 两条命令各自打印结果；测试断言同一 seed 两次运行一致、重试把未送达的调用从 13/20 降到 4/20 |
 
 ## 四、复用性：下游怎么依赖它
 
 **命令行只是库的一个使用者**：`cmd/moonnet` 建在 `src/*` 之上，`examples/*` 与它并列。
 
-- **接口与稳定面**：`moon.mod` 里加本模块即可调用五个库包（按 git 或本地路径引用；发布只差维护者 `moon publish`）；`Sim`、`Link`、`TcpConnection` 等有内部状态的对象字段私有、经方法读取，值是记录，`pkg.generated.mbti` 随代码进版本库（见 [api.md](api.md)）。
+- **接口与稳定面**：下游可用 `moon add Ljh684/moonnet-lab@0.1.0` 安装并调用五个库包；`Sim`、`Link`、`TcpConnection` 等有内部状态的对象字段私有、经方法读取，值是记录，`pkg.generated.mbti` 随代码进版本库（见 [api.md](api.md)）。
 - **证据与价值**：`examples/embed_tcp`、`examples/rpc_retry` 是不使用命令行的消费者，CI 运行它们；把网络不确定性做成可复现的测试输入，并在部署前回答缓冲区深度与算法选择。
 
 ## 五、与已有生态的区别
