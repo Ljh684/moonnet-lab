@@ -56,6 +56,31 @@ jobs:
           assert any(node.get("class") == "stall" for node in root.findall(".//svg:rect", ns))
           PY
 
+      # The multi-flow chart is a second renderer behind the same command: the
+      # trace says which flows exist, and the chart has to carry every one of
+      # them, with the totals the report states, over the shared queues.
+      - name: Produce a fairness trace and chart
+        run: |
+          moon run cmd/moonnet -- run scenarios/fairness.json --trace --json > fairness-trace.json
+          moon run cmd/moonnet -- plot fairness-trace.json > fairness-chart.svg
+          moon run cmd/moonnet -- plot fairness-trace.json > fairness-chart-again.svg
+          cmp fairness-chart.svg fairness-chart-again.svg
+          python3 - <<'PY'
+          import json
+          import xml.etree.ElementTree as ET
+
+          trace = json.load(open("fairness-trace.json"))
+          flows = trace["report"]["flows"]
+          assert trace["flows"] == len(flows) == 4
+          root = ET.parse("fairness-chart.svg").getroot()
+          text = "".join(root.itertext())
+          assert "flows sharing one path" in text
+          for flow in flows:
+              assert f"flow {flow['flow']}" in text
+              assert f"{flow['delivered_bytes']} B" in text
+          assert "uplink queue" in text and "downlink queue" in text
+          PY
+
       # The command line tool is one consumer of the library. These two are
       # consumers that do not use it at all, which is the claim the repository
       # makes about being usable as a dependency.

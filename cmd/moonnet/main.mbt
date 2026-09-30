@@ -38,9 +38,11 @@ fn usage() -> Unit {
   println("")
   println("commands:")
   println(
-    "  run FILE  run a scenario file; --trace adds TCP state and event history",
+    "  run FILE  run a scenario file; --trace adds TCP state and event history, single flow or fairness",
   )
-  println("  plot FILE render a single-flow trace JSON document as SVG")
+  println(
+    "  plot FILE render a trace JSON document as SVG (single flow or fairness)",
+  )
   println(
     "  compare FILE --cc reno,cubic   run one scenario under several algorithms",
   )
@@ -268,7 +270,24 @@ fn plot_trace(args : Array[String]) -> Unit {
       return
     }
   }
-  match @lab.trace_svg_from_json(source) {
+  // One scenario, or several flows sharing a path: the document says which,
+  // and the two charts answer different questions ("what did the sender do"
+  // and "how was the path shared"), so they are separate renderers rather than
+  // one renderer with a flag.
+  let rendered = match @json.parse(source) {
+    Ok(document) =>
+      match document.field("report") {
+        Some(report) =>
+          if report.field("flows") is Some(_) {
+            @lab.fairness_trace_svg_from_json(source)
+          } else {
+            @lab.trace_svg_from_json(source)
+          }
+        None => @lab.trace_svg_from_json(source)
+      }
+    Err(message) => Err("trace input is not valid JSON, " + message)
+  }
+  match rendered {
     Ok(svg) => println(svg)
     Err(message) => println("cannot render trace: " + message)
   }
@@ -437,14 +456,19 @@ fn run_scenario(args : Array[String]) -> Unit {
   // share one path, so the interesting output is per-flow rather than per-run.
   if experiment.flow_algorithms().length() > 1 {
     if trace {
-      println("--trace currently supports single-flow scenarios")
-      return
-    }
-    let fairness = @lab.run_fairness(experiment)
-    if as_json {
-      println(fairness.to_json_text())
+      let traced = @lab.run_fairness_with_trace(experiment)
+      if as_json {
+        println(traced.to_json_text())
+      } else {
+        println(traced.to_lines())
+      }
     } else {
-      println(fairness.to_lines())
+      let fairness = @lab.run_fairness(experiment)
+      if as_json {
+        println(fairness.to_json_text())
+      } else {
+        println(fairness.to_lines())
+      }
     }
   } else if trace {
     let traced = @lab.run_with_trace(experiment)

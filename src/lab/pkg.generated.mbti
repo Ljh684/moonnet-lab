@@ -19,6 +19,8 @@ pub fn compare_json(Scenario, Array[(String, RunSummary)], seeds? : Int) -> Stri
 
 pub fn compare_lines(Scenario, Array[(String, RunSummary)], seeds? : Int) -> String
 
+pub fn fairness_trace_svg_from_json(String) -> Result[String, String]
+
 pub fn format_fixed(Double, Int) -> String
 
 pub fn jain_index(Array[Double]) -> Double
@@ -32,6 +34,8 @@ pub fn render_table(Array[String], Array[Array[String]]) -> String
 pub fn run(Scenario) -> RunReport
 
 pub fn run_fairness(Scenario) -> FairnessReport
+
+pub fn run_fairness_with_trace(Scenario) -> FairnessTraceRun
 
 pub fn run_with_trace(Scenario) -> TraceRun
 
@@ -87,6 +91,13 @@ pub(all) struct FairnessReport {
 } derive(Eq, @debug.Debug)
 pub fn FairnessReport::to_json_text(Self) -> String
 pub fn FairnessReport::to_lines(Self) -> String
+
+pub(all) struct FairnessTraceRun {
+  report : FairnessReport
+  events : Array[String]
+}
+pub fn FairnessTraceRun::to_json_text(Self) -> String
+pub fn FairnessTraceRun::to_lines(Self) -> String
 
 pub(all) struct FlowProfile {
   algorithm : String

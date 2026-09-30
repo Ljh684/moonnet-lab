@@ -1212,11 +1212,21 @@ fn TcpConnection::record_trace(
     Some(value) => value.ps
     None => 0L
   }
+  // A flow that has an identity says so, so that an experiment with several
+  // connections on one path can be told apart in the trace. Flow zero is the
+  // single-connection case and leaves the line exactly as it was, which keeps
+  // every earlier trace byte for byte.
+  let flow_field = if self.flow == 0UL {
+    ""
+  } else {
+    "|flow=" + self.flow.to_string()
+  }
   sim.note(
     "tcp|" +
     sim.now().ps.to_string() +
     "|" +
     event +
+    flow_field +
     "|state=" +
     self.state.render() +
     "|cwnd=" +

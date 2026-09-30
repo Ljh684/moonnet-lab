@@ -73,9 +73,36 @@ pub fn jain_index(values : Array[Double]) -> Double {
 /// The flows start together and are given their payload once all handshakes have
 /// completed, so no flow gets a head start by luck of scheduling.
 pub fn run_fairness(scenario : Scenario) -> FairnessReport {
+  fairness_internal(scenario, false).0
+}
+
+///|
+/// A fairness experiment with the event trace that produced it.
+///
+/// The report inside is the report `run_fairness` returns, so a chart drawn
+/// from the trace and the per-flow table describe one run rather than two.
+pub(all) struct FairnessTraceRun {
+  report : FairnessReport
+  events : Array[String]
+}
+
+///|
+pub fn run_fairness_with_trace(scenario : Scenario) -> FairnessTraceRun {
+  let (report, events) = fairness_internal(scenario, true)
+  { report, events, }
+}
+
+///|
+fn fairness_internal(
+  scenario : Scenario,
+  record_trace : Bool,
+) -> (FairnessReport, Array[String]) {
   let names = scenario.flow_algorithms()
   let count = names.length()
   let sim = @sim.Sim::new(scenario.seed)
+  if record_trace {
+    sim.start_journal()
+  }
   let clients : Array[@tcp.TcpConnection] = []
   let servers : Array[@tcp.TcpConnection] = []
   let mut index = 0
@@ -196,7 +223,7 @@ pub fn run_fairness(scenario : Scenario) -> FairnessReport {
     shares.push(delivered.to_double())
     index = index + 1
   }
-  {
+  let report : FairnessReport = {
     scenario: scenario.name,
     seed: scenario.seed,
     flows: results,
@@ -208,6 +235,8 @@ pub fn run_fairness(scenario : Scenario) -> FairnessReport {
     uplink_dropped: uplink.dropped(),
     uplink_lost: uplink.lost(),
   }
+  let events = if record_trace { tcp_trace_events(sim.journal()) } else { [] }
+  (report, events)
 }
 
 ///|
@@ -296,6 +325,31 @@ pub fn FairnessReport::to_lines(self : FairnessReport) -> String {
     lines.push(
       "            shares below say as much about the offered load as the path",
     )
+  }
+  lines.join("\n")
+}
+
+///|
+/// The fairness trace as a document: the report, plus every transport and queue
+/// event that produced it, each transport event tagged with its flow.
+pub fn FairnessTraceRun::to_json_text(self : FairnessTraceRun) -> String {
+  let events : Array[String] = []
+  for event in self.events {
+    events.push(@json.quote(event))
+  }
+  @json.object_of_texts([
+    ("report", self.report.to_json_text()),
+    ("flows", self.report.flows.length().to_string()),
+    ("events", @json.array_of_texts(events)),
+  ])
+}
+
+///|
+/// The fairness trace as text: the per-flow table, then the events.
+pub fn FairnessTraceRun::to_lines(self : FairnessTraceRun) -> String {
+  let lines : Array[String] = [self.report.to_lines(), "", "events"]
+  for event in self.events {
+    lines.push("  " + event)
   }
   lines.join("\n")
 }
