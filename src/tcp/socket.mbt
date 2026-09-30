@@ -965,6 +965,9 @@ fn TcpConnection::pump(self : TcpConnection, sim : @sim.Sim) -> Unit {
     }
     let allowance = sender_window - in_flight
     if allowance <= 0 {
+      // There is application data ready, but neither the congestion window nor
+      // the peer's receive window currently allows another segment.
+      self.record_trace(sim, "send_blocked")
       break
     }
     let mut take = self.config.mss

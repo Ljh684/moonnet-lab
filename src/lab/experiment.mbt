@@ -37,6 +37,7 @@ pub(all) struct TraceRun {
   report : RunReport
   events : Array[String]
   max_delivery_gap : @sim.Time
+  delivery_diagnostics : DeliveryDiagnostics
 }
 
 ///|
@@ -145,10 +146,12 @@ fn run_internal(scenario : Scenario, record_trace : Bool) -> TraceRun {
     mean_queue_packets,
     max_sojourn: pair.up.max_sojourn(),
   }
+  let events = tcp_trace_events(sim.journal())
   {
     report,
-    events: tcp_trace_events(sim.journal()),
+    events,
     max_delivery_gap: pair.server.max_delivery_gap(),
+    delivery_diagnostics: diagnose_delivery_gaps(events, report.srtt),
   }
 }
 
@@ -168,8 +171,12 @@ fn tcp_trace_events(journal : Array[String]) -> Array[String] {
 /// The traced run as JSON, with report fields, transport and queue events.
 pub fn TraceRun::to_json_text(self : TraceRun) -> String {
   let events : Array[String] = []
+  let intervals : Array[String] = []
   for event in self.events {
     events.push(@json.quote(event))
+  }
+  for interval in self.delivery_diagnostics.intervals {
+    intervals.push(interval.to_json_text())
   }
   @json.object_of_texts([
     ("report", self.report.to_json_text()),
@@ -178,6 +185,35 @@ pub fn TraceRun::to_json_text(self : TraceRun) -> String {
       @json.object_of_texts([
         ("max_inter_delivery_gap_ps", self.max_delivery_gap.ps.to_string()),
         ("max_inter_delivery_gap", @json.quote(self.max_delivery_gap.render())),
+        (
+          "stall_threshold_ps",
+          self.delivery_diagnostics.threshold.ps.to_string(),
+        ),
+        (
+          "stall_threshold",
+          @json.quote(self.delivery_diagnostics.threshold.render()),
+        ),
+        (
+          "stall_count",
+          self.delivery_diagnostics.intervals.length().to_string(),
+        ),
+        (
+          "total_stall_duration_ps",
+          self.delivery_diagnostics.total_duration.ps.to_string(),
+        ),
+        (
+          "total_stall_duration",
+          @json.quote(self.delivery_diagnostics.total_duration.render()),
+        ),
+        (
+          "max_stall_duration_ps",
+          self.delivery_diagnostics.max_duration.ps.to_string(),
+        ),
+        (
+          "max_stall_duration",
+          @json.quote(self.delivery_diagnostics.max_duration.render()),
+        ),
+        ("stall_intervals", @json.array_of_texts(intervals)),
       ]),
     ),
     ("events", @json.array_of_texts(events)),
@@ -187,9 +223,37 @@ pub fn TraceRun::to_json_text(self : TraceRun) -> String {
 ///|
 /// The traced run as a readable report followed by transport and queue samples.
 pub fn TraceRun::to_lines(self : TraceRun) -> String {
+  let interval_lines : Array[String] = []
+  for interval in self.delivery_diagnostics.intervals {
+    interval_lines.push(
+      interval.start.render() +
+      ".." +
+      interval.end.render() +
+      " " +
+      interval.duration.render() +
+      " next_bytes=" +
+      interval.next_delivery_bytes.to_string() +
+      " path_queue=" +
+      interval.path_queue_seen.to_string() +
+      " recovery=" +
+      interval.recovery_event_seen.to_string() +
+      " sender_window_blocked=" +
+      interval.sender_window_blocked_seen.to_string(),
+    )
+  }
   self.report.to_lines() +
   "\nmax inter-delivery gap: " +
   self.max_delivery_gap.render() +
+  "\ndelivery stalls (threshold " +
+  self.delivery_diagnostics.threshold.render() +
+  "): " +
+  self.delivery_diagnostics.intervals.length().to_string() +
+  ", total " +
+  self.delivery_diagnostics.total_duration.render() +
+  ", max " +
+  self.delivery_diagnostics.max_duration.render() +
+  "\ndelivery stall intervals:\n" +
+  interval_lines.join("\n") +
   "\nevent trace:\n" +
   self.events.join("\n")
 }

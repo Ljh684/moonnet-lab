@@ -286,6 +286,14 @@ test "tail probes prevent repeated long RTO stalls on the shallow Reno path" {
   inspect(first.report.timeouts <= 4, content="true")
   inspect(first.max_delivery_gap.ps < 2_000_000_000_000L, content="true")
   inspect(first.events.join("\n").contains("|tail_probe|"), content="true")
+  let diagnostics = first.delivery_diagnostics
+  inspect(diagnostics.intervals.length() > 0, content="true")
+  inspect(first.to_lines().contains("delivery stall intervals"), content="true")
+  inspect(
+    diagnostics.total_duration.ps >= diagnostics.max_duration.ps,
+    content="true",
+  )
+  inspect(first.to_json_text() == second.to_json_text(), content="true")
   inspect(
     first.report.to_json_text() == second.report.to_json_text(),
     content="true",

@@ -12,13 +12,14 @@
 | `src/net` | 链路与队列：带宽、传播延迟、抖动、丢包、缓冲与队列管理 | `LinkSpec::new` / `with_loss` / `with_jitter`、`QueueSpec::packets` / `bytes` / `with_discipline`、`Link::new` / `send` / `summary`、`dropped` / `lost` / `mean_queue_packets` / `max_sojourn` |
 | `src/tcp` | TCP 状态机、重传与恢复、可插拔拥塞控制 | `TcpConfig::new`、`LinkPair::new_with_cc`、`TcpConnection::connect` / `send` / `close` / `cwnd` / `retransmits` / `tlp_probes`、`Reno::new` / `cubic(mss)`、`CongestionControl` 接口 |
 | `src/json` | 零依赖 JSON 读写，解析错误带字节偏移 | `parse`、`Json` 取值、`object_text` / `object_of_texts` |
-| `src/lab` | 场景与报告：把实验写成数据 | `Scenario::from_json`、`run`、`run_with_trace`、`compare`、`sweep`、`summarise`、`run_fairness`、`RunReport::to_json_text` / `to_lines`、`TraceRun::to_json_text` / `to_lines` |
+| `src/lab` | 场景与报告：把实验写成数据 | `Scenario::from_json`、`run`、`run_with_trace`、`compare`、`sweep`、`summarise`、`run_fairness`、`RunReport::to_json_text` / `to_lines`、`TraceRun.delivery_diagnostics` / `to_json_text` / `to_lines` |
 | `cmd/moonnet` | 命令行前端 | `run` / `compare` / `sweep` / `list` / `version` |
 
 ## 稳定面在哪里
 
 - **有内部状态的对象只暴露方法**：`Sim`、`Rng`、`SplitMix64`、`Link`、`PacketQueue`、`TcpConnection`、`Reno`、`Cubic` 的字段是私有的，读状态一律走方法（`sim.now()`、`link.dropped()`、`connection.cwnd()`）。字段是实现的自由，重构它不会碰到下游。
-- **值是记录，字段就是契约**：`Time`、`Packet`、`Segment`、`Seq`、`Flags`、`TcpConfig`、`LinkSpec`、`QueueSpec` 以及 `src/lab` 的 `Scenario` / `RunReport` / `RunSummary` 是纯数据，字段公开、可读可构造。
+- **值是记录，字段就是契约**：`Time`、`Packet`、`Segment`、`Seq`、`Flags`、`TcpConfig`、`LinkSpec`、`QueueSpec` 以及 `src/lab` 的 `Scenario` / `RunReport` / `RunSummary` / `TraceRun` / `DeliveryDiagnostics` / `DeliveryStall` 是纯数据，字段公开、可读可构造。
+- **停顿诊断说明**：`TraceRun::delivery_diagnostics` 只统计超过 `max(2 × SRTT, 1 ms)` 的连续交付间隔，提供次数、累计/最长时长和逐段观测信号。队列非空、恢复事件、发送窗口阻塞可能同时出现；这些字段记录证据，不保证单一因果归属。
 - **接口的机器可读版本**是每个包目录下的 `pkg.generated.mbti`，由 `moon info` 生成。它和代码一起进版本库，因此**一次接口改动在 diff 里是什么样的，任何人都能看见**；CI 会重新生成它，改动不会是意外。
 - **版本与兼容**：当前 `0.1.0`。0.x 阶段按 minor 递增，破坏性改动不承诺同 minor 兼容；等接口稳定到 1.0 再给兼容承诺。这不是免责声明，是让"能不能依赖"变成一个有日期的判断。
 

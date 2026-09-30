@@ -54,6 +54,23 @@ pub(all) struct ConnectionProfile {
   initial_seq : UInt
 } derive(Eq, @debug.Debug)
 
+pub(all) struct DeliveryDiagnostics {
+  threshold : @sim.Time
+  intervals : Array[DeliveryStall]
+  total_duration : @sim.Time
+  max_duration : @sim.Time
+}
+
+pub(all) struct DeliveryStall {
+  start : @sim.Time
+  end : @sim.Time
+  duration : @sim.Time
+  next_delivery_bytes : Int
+  path_queue_seen : Bool
+  recovery_event_seen : Bool
+  sender_window_blocked_seen : Bool
+}
+
 pub(all) struct FairnessReport {
   scenario : String
   seed : UInt64
@@ -167,6 +184,7 @@ pub(all) struct TraceRun {
   report : RunReport
   events : Array[String]
   max_delivery_gap : @sim.Time
+  delivery_diagnostics : DeliveryDiagnostics
 }
 pub fn TraceRun::to_json_text(Self) -> String
 pub fn TraceRun::to_lines(Self) -> String
